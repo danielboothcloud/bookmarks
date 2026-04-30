@@ -24,6 +24,10 @@ class _FakeBookmarkRepository implements IBookmarkRepository {
   @override
   Future<Result<Bookmark, AppError>> save(Bookmark bookmark) async =>
       Ok<Bookmark, AppError>(bookmark);
+
+  @override
+  Future<Result<void, AppError>> delete(String id) async =>
+      const Ok<void, AppError>(null);
 }
 
 Widget _buildApp() {
@@ -105,40 +109,130 @@ void main() {
       expect(orders, containsAll(<double>[1, 3, 4]));
     });
 
-    testWidgets('Esc invokes DismissIntent action and unfocuses',
+    testWidgets('Esc invokes AppDismissIntent action (cascade entry point)',
         (tester) async {
       await tester.binding.setSurfaceSize(const Size(1200, 800));
       await tester.pumpWidget(_buildApp());
       await tester.pumpAndSettle();
 
-      // Focus the FilledButton so Esc has something to dismiss.
-      final buttonFinder = find.widgetWithText(FilledButton, 'Add bookmark');
-      final focusNode = Focus.maybeOf(tester.element(buttonFinder));
-      focusNode?.requestFocus();
-      FocusScope.of(tester.element(buttonFinder)).requestFocus();
-      await tester.pump();
-
-      // DismissIntent must be wired in Actions — Actions.invoke returns null
-      // when the intent has no handler in scope. With our handler in place it
-      // returns void (null) but does not throw.
-      final actionsContext = tester.element(find.byType(AppShell));
+      final ctx = tester.element(find.byType(Sidebar));
+      // AppDismissIntent must be wired in AppShell's Actions. We use a custom
+      // intent (not Flutter's DismissIntent) because Scaffold registers a
+      // _DismissDrawerAction for DismissIntent that intercepts Esc even when
+      // no drawer is open.
       expect(
-        () => Actions.invoke(actionsContext, const DismissIntent()),
+        () => Actions.invoke(ctx, const AppDismissIntent()),
         returnsNormally,
       );
-      // Confirm the handler is actually registered (not falling through).
-      final action = Actions.maybeFind<DismissIntent>(actionsContext);
+      final action = Actions.maybeFind<AppDismissIntent>(ctx);
       expect(action, isNotNull,
-          reason: 'DismissIntent must have an Action handler registered');
+          reason: 'AppDismissIntent must have an Action handler registered');
     });
   });
 
   group('AppShell intents', () {
-    test('exposes AddBookmark, FocusSearch, Dismiss intents', () {
+    test('exposes AddBookmark, FocusSearch, DeleteSelected, Dismiss intents',
+        () {
       // Compile-time guard: these classes are part of the public surface
       // expected by AppShell's Shortcuts/Actions configuration.
       expect(const AddBookmarkIntent(), isA<Intent>());
       expect(const FocusSearchIntent(), isA<Intent>());
+      expect(const DeleteSelectedBookmarkIntent(), isA<Intent>());
+    });
+
+    testWidgets(
+        'DeleteSelectedBookmarkIntent prompts pendingDelete on the selected id '
+        '(Story 1.5)', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedBookmarkIdProvider.notifier).select('chosen-id');
+
+      Actions.invoke(ctx, const DeleteSelectedBookmarkIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingDeleteIdProvider), 'chosen-id');
+    });
+
+    testWidgets(
+        'DeleteSelectedBookmarkIntent is a no-op when nothing is selected',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      expect(container.read(selectedBookmarkIdProvider), isNull);
+
+      Actions.invoke(ctx, const DeleteSelectedBookmarkIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingDeleteIdProvider), isNull);
+    });
+
+    testWidgets('AppDismissIntent: branch 1 -- clears pendingDelete first',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedBookmarkIdProvider.notifier).select('id-1');
+      container.read(addFormVisibleProvider.notifier).show();
+      container.read(pendingDeleteIdProvider.notifier).prompt('id-1');
+      await tester.pumpAndSettle();
+
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingDeleteIdProvider), isNull);
+      expect(container.read(addFormVisibleProvider), isTrue,
+          reason: 'cascade stops at pendingDelete -- form untouched');
+      expect(container.read(selectedBookmarkIdProvider), 'id-1');
+    });
+
+    testWidgets(
+        'AppDismissIntent: branch 2 -- hides form when no pendingDelete',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedBookmarkIdProvider.notifier).select('id-1');
+      container.read(addFormVisibleProvider.notifier).show();
+      await tester.pumpAndSettle();
+
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(addFormVisibleProvider), isFalse);
+      expect(container.read(selectedBookmarkIdProvider), 'id-1',
+          reason: 'cascade stops at form -- selection untouched');
+    });
+
+    testWidgets(
+        'AppDismissIntent: branch 3 -- clears selection when no form, no pendingDelete',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedBookmarkIdProvider.notifier).select('id-1');
+      await tester.pumpAndSettle();
+
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(selectedBookmarkIdProvider), isNull);
     });
   });
 

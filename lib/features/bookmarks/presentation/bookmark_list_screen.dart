@@ -76,7 +76,7 @@ class _SaveErrorBanner extends StatelessWidget {
         vertical: AppSpacing.sm,
       ),
       child: Text(
-        "Couldn't save bookmark — try again.",
+        "Couldn't save changes — try again.",
         style: Theme.of(context)
             .textTheme
             .bodySmall

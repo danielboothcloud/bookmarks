@@ -1,4 +1,5 @@
 import 'package:bookmarks/core/database/app_database.dart';
+import 'package:bookmarks/core/error/app_error.dart';
 import 'package:bookmarks/core/error/result.dart';
 import 'package:bookmarks/features/bookmarks/data/bookmark_repository.dart';
 import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
@@ -91,6 +92,35 @@ void main() {
   test('getById returns Err for missing id', () async {
     final result = await repository.getById('does-not-exist');
     expect(result, isA<Err<Bookmark, Object>>());
+  });
+
+  test('delete removes the row and getById returns Err(NotFoundError)',
+      () async {
+    final bookmark = make(id: 'to-remove');
+    await repository.save(bookmark);
+
+    final deleteResult = await repository.delete('to-remove');
+    expect(deleteResult, isA<Ok<void, Object>>());
+
+    final getResult = await repository.getById('to-remove');
+    expect(getResult, isA<Err<Bookmark, Object>>());
+    final all = await db.select(db.bookmarks).get();
+    expect(all, isEmpty);
+  });
+
+  test(
+      'delete with unknown id returns Err(NotFoundError) and leaves other '
+      'rows untouched', () async {
+    await repository.save(make(id: 'keep-1'));
+    await repository.save(make(id: 'keep-2'));
+
+    final result = await repository.delete('does-not-exist');
+    expect(result, isA<Err<void, Object>>());
+    final err = (result as Err<void, Object>).error;
+    expect(err, isA<NotFoundError>());
+
+    final all = await db.select(db.bookmarks).get();
+    expect(all.map((r) => r.id).toSet(), {'keep-1', 'keep-2'});
   });
 
   test('IDs are preserved as strings (not auto-increment ints)', () async {

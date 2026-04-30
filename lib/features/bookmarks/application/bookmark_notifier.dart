@@ -66,6 +66,22 @@ class BookmarkNotifier extends AsyncNotifier<void> {
     }
   }
 
+  /// Removes the bookmark with [id] via the repository (Story 1.5). Routes
+  /// failures through this notifier's `AsyncValue<void>` so `_SaveErrorBanner`
+  /// (which already reads `bookmarkNotifierProvider.hasError`) surfaces them
+  /// inline -- no second banner type for delete failures. Does NOT trigger a
+  /// metadata fetch.
+  Future<void> deleteBookmark(String id) async {
+    state = const AsyncValue<void>.loading();
+    final result = await ref.read(bookmarkRepositoryProvider).delete(id);
+    switch (result) {
+      case Ok():
+        state = const AsyncValue<void>.data(null);
+      case Err(:final error):
+        state = AsyncValue<void>.error(error, StackTrace.current);
+    }
+  }
+
   Future<void> _fetchMetadata(Bookmark bookmark) async {
     // Mark in-flight synchronously (before any await) so the spinner appears
     // on the next frame.

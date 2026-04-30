@@ -47,6 +47,21 @@ class BookmarkRepository implements IBookmarkRepository {
     }
   }
 
+  @override
+  Future<Result<void, AppError>> delete(String id) async {
+    try {
+      final affected = await (_db.delete(_db.bookmarks)
+            ..where((t) => t.id.equals(id)))
+          .go();
+      if (affected == 0) {
+        return const Err<void, AppError>(NotFoundError());
+      }
+      return const Ok<void, AppError>(null);
+    } catch (e) {
+      return Err<void, AppError>(StorageError(e.toString()));
+    }
+  }
+
   BookmarksCompanion _toCompanion(Bookmark b) => BookmarksCompanion(
         id: Value(b.id),
         url: Value(b.url),

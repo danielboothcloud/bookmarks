@@ -33,8 +33,18 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
 
   @override
   void dispose() {
-    // Restore previous focus before disposing this form's nodes.
-    _previousFocus?.requestFocus();
+    // Restore previous focus before disposing this form's nodes -- but ONLY
+    // when the captured node is still attached. If the user opened the form
+    // via the EmptyState's "Add bookmark" CTA, that button is now unmounted
+    // and `_previousFocus` points at a disposed FocusNode; calling
+    // requestFocus() on it leaves primary focus in a dead state OUTSIDE the
+    // AppShell's Shortcuts subtree, breaking Cmd+N until the user clicks
+    // back into the tree. Skipping the restore lets Flutter re-parent focus
+    // to the nearest live FocusScope (which IS inside AppShell's Shortcuts).
+    final prev = _previousFocus;
+    if (prev != null && prev.context != null) {
+      prev.requestFocus();
+    }
     _urlController.dispose();
     _titleController.dispose();
     _urlFocusNode.dispose();

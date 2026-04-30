@@ -24,6 +24,8 @@ class _FakeRepo implements IBookmarkRepository {
   final StreamController<List<Bookmark>> _controller;
   final List<Bookmark> _items = [];
   Result<Bookmark, AppError> Function(Bookmark)? saveResult;
+  Result<void, AppError> Function(String)? deleteResult;
+  final List<String> deletedIds = <String>[];
 
   @override
   Stream<List<Bookmark>> watchAll() => _controller.stream;
@@ -37,6 +39,18 @@ class _FakeRepo implements IBookmarkRepository {
     final result = (saveResult ?? Ok<Bookmark, AppError>.new)(bookmark);
     if (result is Ok<Bookmark, AppError>) {
       _items.insert(0, bookmark);
+      _controller.add(List.unmodifiable(_items));
+    }
+    return result;
+  }
+
+  @override
+  Future<Result<void, AppError>> delete(String id) async {
+    deletedIds.add(id);
+    final result =
+        deleteResult?.call(id) ?? const Ok<void, AppError>(null);
+    if (result is Ok<void, AppError>) {
+      _items.removeWhere((b) => b.id == id);
       _controller.add(List.unmodifiable(_items));
     }
     return result;
@@ -239,7 +253,7 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await tester.pumpAndSettle();
 
-    expect(find.text("Couldn't save bookmark — try again."), findsOneWidget);
+    expect(find.text("Couldn't save changes — try again."), findsOneWidget);
   });
 
   testWidgets(

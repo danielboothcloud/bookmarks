@@ -20,6 +20,7 @@ class _FakeRepo implements IBookmarkRepository {
 
   final StreamController<List<Bookmark>> _controller;
   final List<Bookmark> savedBookmarks = [];
+  final List<String> deletedIds = [];
   Result<Bookmark, AppError> Function(Bookmark)? saveResult;
 
   @override
@@ -33,6 +34,12 @@ class _FakeRepo implements IBookmarkRepository {
   Future<Result<Bookmark, AppError>> save(Bookmark bookmark) async {
     savedBookmarks.add(bookmark);
     return (saveResult ?? Ok<Bookmark, AppError>.new)(bookmark);
+  }
+
+  @override
+  Future<Result<void, AppError>> delete(String id) async {
+    deletedIds.add(id);
+    return const Ok<void, AppError>(null);
   }
 }
 
@@ -323,6 +330,141 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<TextField>(notesField).focusNode!.hasFocus, isTrue,
         reason: 'Tab from URL must focus notes');
+  });
+
+  group('delete flow (Story 1.5 -- moved into detail pane)', () {
+    testWidgets('trash icon prompts pendingDeleteIdProvider', (tester) async {
+      final controller = StreamController<List<Bookmark>>.broadcast();
+      addTearDown(controller.close);
+      final repo = _FakeRepo(controller);
+
+      await tester.pumpWidget(_wrap(repo));
+      controller.add([_bm('a', title: 'Hello')]);
+      await tester.pumpAndSettle();
+      final c = _container(tester);
+      c.read(selectedBookmarkIdProvider.notifier).select('a');
+      await tester.pumpAndSettle();
+
+      expect(c.read(pendingDeleteIdProvider), isNull);
+      await tester.tap(find.byTooltip('Delete bookmark'));
+      await tester.pumpAndSettle();
+
+      expect(c.read(pendingDeleteIdProvider), 'a');
+    });
+
+    testWidgets(
+        'confirmation view shows title preview and Cancel-before-Delete button order',
+        (tester) async {
+      final controller = StreamController<List<Bookmark>>.broadcast();
+      addTearDown(controller.close);
+      final repo = _FakeRepo(controller);
+
+      await tester.pumpWidget(_wrap(repo));
+      controller.add([_bm('a', title: 'My Bookmark')]);
+      await tester.pumpAndSettle();
+      final c = _container(tester);
+      c.read(selectedBookmarkIdProvider.notifier).select('a');
+      c.read(pendingDeleteIdProvider.notifier).prompt('a');
+      await tester.pumpAndSettle();
+
+      expect(find.text('Delete this bookmark?'), findsOneWidget);
+      expect(find.text('My Bookmark'), findsOneWidget);
+      expect(find.byType(TextField), findsNothing,
+          reason: 'editing fields hide while confirming');
+
+      final cancelRect =
+          tester.getRect(find.widgetWithText(TextButton, 'Cancel'));
+      final deleteRect =
+          tester.getRect(find.widgetWithText(TextButton, 'Delete'));
+      expect(cancelRect.left, lessThan(deleteRect.left));
+    });
+
+    testWidgets('Cancel clears pendingDeleteIdProvider, returns to populated body',
+        (tester) async {
+      final controller = StreamController<List<Bookmark>>.broadcast();
+      addTearDown(controller.close);
+      final repo = _FakeRepo(controller);
+
+      await tester.pumpWidget(_wrap(repo));
+      controller.add([_bm('a', title: 'Hello')]);
+      await tester.pumpAndSettle();
+      final c = _container(tester);
+      c.read(selectedBookmarkIdProvider.notifier).select('a');
+      c.read(pendingDeleteIdProvider.notifier).prompt('a');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(c.read(pendingDeleteIdProvider), isNull);
+      expect(find.byType(TextField), findsNWidgets(3),
+          reason: 'editing fields return after cancel');
+    });
+
+    testWidgets(
+        'Delete dispatches deleteBookmark, clears confirmation, migrates '
+        'selection to next item', (tester) async {
+      final controller = StreamController<List<Bookmark>>.broadcast();
+      addTearDown(controller.close);
+      final repo = _FakeRepo(controller);
+
+      await tester.pumpWidget(_wrap(repo));
+      controller.add([_bm('a'), _bm('b'), _bm('c')]);
+      await tester.pumpAndSettle();
+      final c = _container(tester);
+      c.read(selectedBookmarkIdProvider.notifier).select('a');
+      c.read(pendingDeleteIdProvider.notifier).prompt('a');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(repo.deletedIds, ['a']);
+      expect(c.read(pendingDeleteIdProvider), isNull);
+      expect(c.read(selectedBookmarkIdProvider), 'b',
+          reason: 'selection migrates to the immediate successor');
+    });
+
+    testWidgets('Enter on the confirmation view confirms delete', (tester) async {
+      final controller = StreamController<List<Bookmark>>.broadcast();
+      addTearDown(controller.close);
+      final repo = _FakeRepo(controller);
+
+      await tester.pumpWidget(_wrap(repo));
+      controller.add([_bm('a'), _bm('b')]);
+      await tester.pumpAndSettle();
+      final c = _container(tester);
+      c.read(selectedBookmarkIdProvider.notifier).select('a');
+      c.read(pendingDeleteIdProvider.notifier).prompt('a');
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      expect(repo.deletedIds, ['a']);
+      expect(c.read(pendingDeleteIdProvider), isNull);
+    });
+
+    testWidgets('Delete on the last item clears selection (no successor)',
+        (tester) async {
+      final controller = StreamController<List<Bookmark>>.broadcast();
+      addTearDown(controller.close);
+      final repo = _FakeRepo(controller);
+
+      await tester.pumpWidget(_wrap(repo));
+      controller.add([_bm('only')]);
+      await tester.pumpAndSettle();
+      final c = _container(tester);
+      c.read(selectedBookmarkIdProvider.notifier).select('only');
+      c.read(pendingDeleteIdProvider.notifier).prompt('only');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(repo.deletedIds, ['only']);
+      expect(c.read(selectedBookmarkIdProvider), isNull);
+    });
   });
 
   testWidgets('selection swap re-initialises controllers to the new bookmark',

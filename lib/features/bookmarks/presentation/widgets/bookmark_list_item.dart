@@ -11,6 +11,10 @@ import '../../domain/bookmark.dart';
 // TODO(story-1.4-narrow-detail): when the detail pane is hidden (< 900px), the
 // UX spec calls for an inline-expansion of the selected item at the bottom of
 // the row instead of a separate panel. Deferred until users report it missing.
+// At narrow widths the delete trigger (currently in the detail pane) will need
+// a separate path -- see bookmark_detail_pane.dart for the trash button + inline
+// confirmation. Story 1.5's keyboard Delete shortcut lives at app_shell.dart
+// (works regardless of focus, as long as a bookmark is selected).
 
 class BookmarkListItem extends ConsumerWidget {
   const BookmarkListItem({

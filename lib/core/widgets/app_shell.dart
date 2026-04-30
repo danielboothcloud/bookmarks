@@ -18,6 +18,55 @@ class FocusSearchIntent extends Intent {
   const FocusSearchIntent();
 }
 
+class DeleteSelectedBookmarkIntent extends Intent {
+  const DeleteSelectedBookmarkIntent();
+}
+
+/// App-level dismiss intent that is NOT Flutter's [DismissIntent]. Scaffold
+/// registers its own `_DismissDrawerAction` for [DismissIntent] which
+/// intercepts the key (even when disabled) and prevents our cascade from
+/// running. Using a distinct intent class side-steps the interception while
+/// keeping per-feature `DismissIntent` handlers (e.g. inline-add form Esc)
+/// working unchanged via child-first shortcut resolution.
+class AppDismissIntent extends Intent {
+  const AppDismissIntent();
+}
+
+/// AppShell-level handler for Backspace/Delete keys. Two `isEnabled` guards:
+///   - **No bookmark selected** -> nothing to delete; let the key propagate.
+///   - **Focus is inside an EditableText** -> the user is editing text in a
+///     TextField (e.g. inline-add URL field, detail-pane title); Backspace
+///     and Delete must reach EditableText for character deletion. Returning
+///     `false` makes Shortcuts emit `KeyEventResult.ignored` so the platform
+///     text-input pipeline processes the key.
+class _DeleteSelectedBookmarkAction
+    extends Action<DeleteSelectedBookmarkIntent> {
+  _DeleteSelectedBookmarkAction(this._ref);
+
+  final WidgetRef _ref;
+
+  bool _focusInEditableText() {
+    final focused = FocusManager.instance.primaryFocus;
+    final ctx = focused?.context;
+    if (ctx == null) return false;
+    return ctx.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  @override
+  bool isEnabled(DeleteSelectedBookmarkIntent intent) {
+    if (_focusInEditableText()) return false;
+    return _ref.read(selectedBookmarkIdProvider) != null;
+  }
+
+  @override
+  Object? invoke(DeleteSelectedBookmarkIntent intent) {
+    final id = _ref.read(selectedBookmarkIdProvider);
+    if (id == null) return null;
+    _ref.read(pendingDeleteIdProvider.notifier).prompt(id);
+    return null;
+  }
+}
+
 class AppShell extends ConsumerWidget {
   const AppShell({required this.navigationShell, super.key});
 
@@ -35,7 +84,15 @@ class AppShell extends ConsumerWidget {
             FocusSearchIntent(),
         SingleActivator(LogicalKeyboardKey.keyF, control: true):
             FocusSearchIntent(),
-        SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+        // Delete / Backspace prompt deletion of the currently-selected
+        // bookmark. EditableText (TextField/Notes) consumes these keys
+        // first when focus is on a text field, so editing a character
+        // never accidentally triggers a delete prompt.
+        SingleActivator(LogicalKeyboardKey.delete):
+            DeleteSelectedBookmarkIntent(),
+        SingleActivator(LogicalKeyboardKey.backspace):
+            DeleteSelectedBookmarkIntent(),
+        SingleActivator(LogicalKeyboardKey.escape): AppDismissIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -55,9 +112,35 @@ class AppShell extends ConsumerWidget {
               return null;
             },
           ),
-          DismissIntent: CallbackAction<DismissIntent>(
+          DeleteSelectedBookmarkIntent: _DeleteSelectedBookmarkAction(ref),
+          AppDismissIntent: CallbackAction<AppDismissIntent>(
             onInvoke: (_) {
-              FocusManager.instance.primaryFocus?.unfocus();
+              // Cascade in priority order: each Esc handles ONE level so
+              // the user can incrementally back out of any nested state.
+              // Per-feature DismissIntent handlers (e.g. inline-add form)
+              // win when focus is in their subtree because their Shortcuts
+              // bind Esc to DismissIntent at a closer scope -- this cascade
+              // only runs when no child handler matched.
+              if (ref.read(pendingDeleteIdProvider) != null) {
+                ref.read(pendingDeleteIdProvider.notifier).clear();
+                return null;
+              }
+              if (ref.read(addFormVisibleProvider)) {
+                ref.read(addFormVisibleProvider.notifier).hide();
+                return null;
+              }
+              if (ref.read(selectedBookmarkIdProvider) != null) {
+                // Clear selection only -- do NOT call primaryFocus.unfocus().
+                // Unfocusing here moved focus to a dead scope and broke
+                // subsequent app-level shortcuts (Cmd+N) until the user
+                // re-selected a bookmark. Edits in the detail pane already
+                // save on focus loss when the pane unmounts; no further
+                // bookkeeping needed.
+                ref.read(selectedBookmarkIdProvider.notifier).clear();
+                return null;
+              }
+              // Final branch: nothing to dismiss. Don't unfocus -- same
+              // reason as branch 3.
               return null;
             },
           ),

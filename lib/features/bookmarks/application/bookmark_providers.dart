@@ -75,6 +75,26 @@ final selectedBookmarkIdProvider =
     NotifierProvider<SelectedBookmarkIdNotifier, String?>(
         SelectedBookmarkIdNotifier.new);
 
+/// The id of the bookmark currently showing its inline delete confirmation
+/// (Story 1.5). Only ONE bookmark can be in this state at a time -- pressing
+/// Delete on a different bookmark moves the confirmation to that one.
+/// `null` means no confirmation is open. Kept separate from
+/// [selectedBookmarkIdProvider] because selection ("which detail pane shows")
+/// and pendingDelete ("which inline confirm is open") have different
+/// lifecycles -- conflating them would create a tri-state harder to reason
+/// about than two orthogonal flags.
+class PendingDeleteIdNotifier extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void prompt(String id) => state = id;
+  void clear() => state = null;
+}
+
+final pendingDeleteIdProvider =
+    NotifierProvider<PendingDeleteIdNotifier, String?>(
+        PendingDeleteIdNotifier.new);
+
 /// The bookmark referenced by [selectedBookmarkIdProvider], joined against
 /// the live list from [watchBookmarksProvider]. Returns null when:
 ///   - no selection is set,

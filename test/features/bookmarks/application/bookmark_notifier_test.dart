@@ -13,7 +13,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingRepository implements IBookmarkRepository {
   final List<Bookmark> savedBookmarks = <Bookmark>[];
+  final List<String> deletedIds = <String>[];
   Result<Bookmark, AppError> Function(Bookmark)? saveResult;
+  Result<void, AppError> Function(String)? deleteResult;
 
   Bookmark? get lastSaved =>
       savedBookmarks.isEmpty ? null : savedBookmarks.last;
@@ -29,6 +31,12 @@ class _RecordingRepository implements IBookmarkRepository {
   Future<Result<Bookmark, AppError>> save(Bookmark bookmark) async {
     savedBookmarks.add(bookmark);
     return (saveResult ?? Ok<Bookmark, AppError>.new)(bookmark);
+  }
+
+  @override
+  Future<Result<void, AppError>> delete(String id) async {
+    deletedIds.add(id);
+    return deleteResult?.call(id) ?? const Ok<void, AppError>(null);
   }
 }
 
@@ -317,6 +325,55 @@ void main() {
           reason: 'no second save: metadata fetch must not run on update');
       expect(fake.requestedUrls, isEmpty,
           reason: 'metadata service must not be called on edit');
+    });
+
+    test('deleteBookmark calls repo.delete once and ends with hasValue (Story 1.5)',
+        () async {
+      final repo = _RecordingRepository();
+      final container = _container(repo);
+      addTearDown(container.dispose);
+
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .deleteBookmark('id-x');
+      await _drain();
+
+      expect(repo.deletedIds, ['id-x']);
+      final state = container.read(bookmarkNotifierProvider);
+      expect(state.hasValue, isTrue);
+      expect(state.hasError, isFalse);
+    });
+
+    test('deleteBookmark on Err sets AsyncValue.error (banner reuse, Story 1.5)',
+        () async {
+      final repo = _RecordingRepository()
+        ..deleteResult =
+            (_) => const Err<void, AppError>(StorageError('disk full'));
+      final container = _container(repo);
+      addTearDown(container.dispose);
+
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .deleteBookmark('id-x');
+
+      final state = container.read(bookmarkNotifierProvider);
+      expect(state.hasError, isTrue);
+      expect(state.error, isA<StorageError>());
+    });
+
+    test('deleteBookmark does NOT call repo.save (no metadata fetch, Story 1.5)',
+        () async {
+      final repo = _RecordingRepository();
+      final container = _container(repo);
+      addTearDown(container.dispose);
+
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .deleteBookmark('id-x');
+      await _drain();
+
+      expect(repo.savedBookmarks, isEmpty,
+          reason: 'delete must not write through save -- no metadata path');
     });
 
     test(
