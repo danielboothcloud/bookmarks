@@ -4,8 +4,10 @@ import 'package:bookmarks/core/error/app_error.dart';
 import 'package:bookmarks/core/error/result.dart';
 import 'package:bookmarks/core/theme/app_theme.dart';
 import 'package:bookmarks/features/bookmarks/application/bookmark_providers.dart';
+import 'package:bookmarks/features/bookmarks/data/metadata_fetch_service.dart';
 import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
 import 'package:bookmarks/features/bookmarks/domain/i_bookmark_repository.dart';
+import 'package:bookmarks/features/bookmarks/domain/url_metadata.dart';
 import 'package:bookmarks/features/bookmarks/presentation/bookmark_list_screen.dart';
 import 'package:bookmarks/features/bookmarks/presentation/widgets/bookmark_list_item.dart';
 import 'package:bookmarks/features/bookmarks/presentation/widgets/inline_add_form.dart';
@@ -50,10 +52,22 @@ Bookmark _bm(String id, {String? title, DateTime? createdAt}) {
   );
 }
 
+/// No-op metadata fetch service: returns empty UrlMetadata for every URL.
+/// Keeps the post-save fire-and-forget path off the real network in tests.
+class _NoopMetadataFetchService implements MetadataFetchService {
+  @override
+  Future<UrlMetadata> fetch(String url) async => const UrlMetadata();
+
+  @override
+  void close() {}
+}
+
 Widget _wrap(IBookmarkRepository repo) {
   return ProviderScope(
     overrides: [
       bookmarkRepositoryProvider.overrideWithValue(repo),
+      metadataFetchServiceProvider
+          .overrideWithValue(_NoopMetadataFetchService()),
     ],
     child: MaterialApp(
       theme: AppTheme.build(),
@@ -204,6 +218,24 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text("Couldn't save bookmark — try again."), findsOneWidget);
+  });
+
+  testWidgets(
+      'BookmarkListItem renders FaviconWidget placeholder for bookmarks with '
+      'no faviconBase64 (Story 1.3 regression)', (tester) async {
+    final controller = StreamController<List<Bookmark>>.broadcast();
+    final repo = _FakeRepo(controller);
+    addTearDown(controller.close);
+
+    await tester.pumpWidget(_wrap(repo));
+    controller.add([_bm('plain')]);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(BookmarkListItem), findsOneWidget);
+    // Globe placeholder should render inside the FaviconWidget slot.
+    expect(find.byIcon(Icons.public), findsOneWidget);
+    // No spinner because nothing is in flight in this scenario.
+    expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
   testWidgets('URL field auto-focuses when form opens (AC1)', (tester) async {

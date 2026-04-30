@@ -1,15 +1,22 @@
+import 'dart:async';
+
 import 'package:bookmarks/core/error/app_error.dart';
 import 'package:bookmarks/core/error/result.dart';
 import 'package:bookmarks/features/bookmarks/application/bookmark_notifier.dart';
 import 'package:bookmarks/features/bookmarks/application/bookmark_providers.dart';
+import 'package:bookmarks/features/bookmarks/data/metadata_fetch_service.dart';
 import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
 import 'package:bookmarks/features/bookmarks/domain/i_bookmark_repository.dart';
+import 'package:bookmarks/features/bookmarks/domain/url_metadata.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingRepository implements IBookmarkRepository {
-  Bookmark? lastSaved;
+  final List<Bookmark> savedBookmarks = <Bookmark>[];
   Result<Bookmark, AppError> Function(Bookmark)? saveResult;
+
+  Bookmark? get lastSaved =>
+      savedBookmarks.isEmpty ? null : savedBookmarks.last;
 
   @override
   Stream<List<Bookmark>> watchAll() => const Stream<List<Bookmark>>.empty();
@@ -20,16 +27,44 @@ class _RecordingRepository implements IBookmarkRepository {
 
   @override
   Future<Result<Bookmark, AppError>> save(Bookmark bookmark) async {
-    lastSaved = bookmark;
+    savedBookmarks.add(bookmark);
     return (saveResult ?? Ok<Bookmark, AppError>.new)(bookmark);
   }
 }
 
-ProviderContainer _container(IBookmarkRepository repo) {
+/// Fake service that returns whatever the test sets up. Default is "no-op
+/// success" -- both fields null -- so existing tests don't need to think
+/// about the metadata fetch path.
+class _FakeMetadataFetchService implements MetadataFetchService {
+  UrlMetadata Function(String url) handler = (_) => const UrlMetadata();
+  Completer<void>? gate;
+  final List<String> requestedUrls = <String>[];
+
+  @override
+  Future<UrlMetadata> fetch(String url) async {
+    requestedUrls.add(url);
+    if (gate != null) await gate!.future;
+    return handler(url);
+  }
+
+  @override
+  void close() {}
+}
+
+ProviderContainer _container(
+  IBookmarkRepository repo, {
+  MetadataFetchService? metadataService,
+}) {
   return ProviderContainer(overrides: [
     bookmarkRepositoryProvider.overrideWithValue(repo),
+    metadataFetchServiceProvider
+        .overrideWithValue(metadataService ?? _FakeMetadataFetchService()),
   ]);
 }
+
+/// Pump until the microtask queue drains -- gives fire-and-forget the chance
+/// to write its second `repo.save(...)` before assertions.
+Future<void> _drain() => Future<void>.delayed(Duration.zero);
 
 void main() {
   test('addBookmark generates UUID v4 and stamps createdAt/updatedAt', () async {
@@ -41,9 +76,9 @@ void main() {
     final beforeMs = DateTime.now().millisecondsSinceEpoch;
     await notifier.addBookmark(url: 'https://example.com');
     final afterMs = DateTime.now().millisecondsSinceEpoch;
+    await _drain();
 
-    final saved = repo.lastSaved!;
-    // UUID v4 canonical form: 8-4-4-4-12 hex with version digit '4'
+    final saved = repo.savedBookmarks.first;
     final uuidV4 = RegExp(
       r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
     );
@@ -63,10 +98,11 @@ void main() {
 
     final notifier = container.read(bookmarkNotifierProvider.notifier);
     await notifier.addBookmark(url: 'https://example.com', title: '   ');
-    expect(repo.lastSaved!.title, 'https://example.com');
+    expect(repo.savedBookmarks.first.title, 'https://example.com');
 
     await notifier.addBookmark(url: 'https://other.com');
-    expect(repo.lastSaved!.title, 'https://other.com');
+    expect(repo.savedBookmarks[1].title, 'https://other.com');
+    await _drain();
   });
 
   test('addBookmark with explicit title preserves it', () async {
@@ -77,7 +113,8 @@ void main() {
     await container
         .read(bookmarkNotifierProvider.notifier)
         .addBookmark(url: 'https://example.com', title: 'Custom');
-    expect(repo.lastSaved!.title, 'Custom');
+    await _drain();
+    expect(repo.savedBookmarks.first.title, 'Custom');
   });
 
   test('addBookmark sets AsyncValue.error on Err without throwing', () async {
@@ -93,4 +130,138 @@ void main() {
     expect(state.hasError, isTrue);
     expect(state.error, isA<StorageError>());
   });
+
+  group('metadata fetch orchestration (Story 1.3)', () {
+    test(
+        'after addBookmark resolves, metadataFetchInFlightProvider contains the '
+        'new bookmark id (verified before fetch completes)', () async {
+      final repo = _RecordingRepository();
+      final fake = _FakeMetadataFetchService()..gate = Completer<void>();
+      final container = _container(repo, metadataService: fake);
+      addTearDown(container.dispose);
+
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .addBookmark(url: 'https://example.com');
+
+      final inFlight = container.read(metadataFetchInFlightProvider);
+      expect(inFlight, contains(repo.savedBookmarks.first.id));
+
+      // Release the gate so the fire-and-forget cleanup runs before disposal.
+      fake.gate!.complete();
+      await _drain();
+    });
+
+    test(
+        'after fetch resolves with title+favicon, repository.save is called a '
+        'second time with the fetched values', () async {
+      final repo = _RecordingRepository();
+      final fake = _FakeMetadataFetchService()
+        ..handler = (_) => const UrlMetadata(
+              title: 'Real Title',
+              faviconBase64: 'data:image/png;base64,abc',
+            );
+      final container = _container(repo, metadataService: fake);
+      addTearDown(container.dispose);
+
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .addBookmark(url: 'https://example.com');
+      await _drain();
+
+      expect(repo.savedBookmarks.length, 2);
+      final updated = repo.savedBookmarks[1];
+      expect(updated.title, 'Real Title');
+      expect(updated.faviconBase64, 'data:image/png;base64,abc');
+      expect(updated.id, repo.savedBookmarks.first.id);
+    });
+
+    test(
+        'fetched title does NOT overwrite a user-provided custom title (H4)',
+        () async {
+      final repo = _RecordingRepository();
+      final fake = _FakeMetadataFetchService()
+        ..handler = (_) => const UrlMetadata(
+              title: 'Fetched Page Title',
+              faviconBase64: 'data:image/png;base64,abc',
+            );
+      final container = _container(repo, metadataService: fake);
+      addTearDown(container.dispose);
+
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .addBookmark(url: 'https://example.com', title: 'My Title');
+      await _drain();
+
+      expect(repo.savedBookmarks.length, 2);
+      final updated = repo.savedBookmarks[1];
+      expect(updated.title, 'My Title',
+          reason: 'user-supplied title must survive the post-fetch save');
+      expect(updated.faviconBase64, 'data:image/png;base64,abc',
+          reason: 'favicon should still be applied even when title is preserved');
+    });
+
+    test('after fetch resolves, the bookmark id is removed from in-flight set',
+        () async {
+      final repo = _RecordingRepository();
+      final fake = _FakeMetadataFetchService();
+      final container = _container(repo, metadataService: fake);
+      addTearDown(container.dispose);
+
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .addBookmark(url: 'https://example.com');
+      await _drain();
+
+      expect(container.read(metadataFetchInFlightProvider), isEmpty);
+    });
+
+    test(
+        'fetch resolves with both fields null -> repo.save NOT called a second '
+        'time (no-op when nothing useful was fetched)', () async {
+      final repo = _RecordingRepository();
+      final fake = _FakeMetadataFetchService(); // default: both null
+      final container = _container(repo, metadataService: fake);
+      addTearDown(container.dispose);
+
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .addBookmark(url: 'https://example.com');
+      await _drain();
+
+      expect(repo.savedBookmarks.length, 1,
+          reason: 'no metadata to apply, second save would be wasteful');
+    });
+
+    test(
+        'post-fetch save Err does NOT pollute bookmarkNotifierProvider state '
+        '(M3 + Story 1.2 _SaveErrorBanner contract)', () async {
+      var saveCalls = 0;
+      final repo = _RecordingRepository()
+        ..saveResult = (b) {
+          saveCalls += 1;
+          // First save (addBookmark) succeeds; second save (post-fetch) errs.
+          return saveCalls == 1
+              ? Ok<Bookmark, AppError>(b)
+              : const Err<Bookmark, AppError>(StorageError('disk full'));
+        };
+      final fake = _FakeMetadataFetchService()
+        ..handler = (_) => const UrlMetadata(
+              title: 'Real Title',
+              faviconBase64: 'data:image/png;base64,abc',
+            );
+      final container = _container(repo, metadataService: fake);
+      addTearDown(container.dispose);
+
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .addBookmark(url: 'https://example.com');
+      await _drain();
+
+      final notifierState = container.read(bookmarkNotifierProvider);
+      expect(notifierState.hasError, isFalse,
+          reason: 'post-fetch save failure must not surface as save error');
+    });
+  });
 }
+

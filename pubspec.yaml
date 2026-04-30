@@ -32,6 +32,10 @@ dependencies:
 
   # Network / connectivity
   connectivity_plus: ^6.1.4
+  http: ^1.6.0
+
+  # URL metadata (title, OG tags) -- favicon bytes fetched directly via http
+  metadata_fetch: ^0.4.2
 
   # IDs
   uuid: ^4.5.1

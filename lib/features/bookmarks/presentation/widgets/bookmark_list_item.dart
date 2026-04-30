@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_spacing.dart';
+import '../../../../core/widgets/favicon_widget.dart';
 import '../../domain/bookmark.dart';
 
 class BookmarkListItem extends StatelessWidget {
@@ -39,18 +40,9 @@ class BookmarkListItem extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 20,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: AppColors.surfaceHover,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                    child: const Icon(
-                      Icons.public,
-                      size: 14,
-                      color: AppColors.textMuted,
-                    ),
+                  FaviconWidget(
+                    bookmarkId: bookmark.id,
+                    faviconBase64: bookmark.faviconBase64,
                   ),
                   const SizedBox(width: AppSpacing.md),
                   Expanded(
