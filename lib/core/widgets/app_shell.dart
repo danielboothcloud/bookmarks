@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/bookmarks/application/bookmark_providers.dart';
+import '../router/app_router.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import 'sidebar.dart';
@@ -14,13 +17,13 @@ class FocusSearchIntent extends Intent {
   const FocusSearchIntent();
 }
 
-class AppShell extends StatelessWidget {
+class AppShell extends ConsumerWidget {
   const AppShell({required this.navigationShell, super.key});
 
   final StatefulNavigationShell navigationShell;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{
         SingleActivator(LogicalKeyboardKey.keyN, meta: true):
@@ -37,7 +40,11 @@ class AppShell extends StatelessWidget {
         actions: <Type, Action<Intent>>{
           AddBookmarkIntent: CallbackAction<AddBookmarkIntent>(
             onInvoke: (_) {
-              // TODO(story-1.2): open inline add form.
+              if (GoRouterState.of(context).matchedLocation !=
+                  AppRoutes.bookmarks) {
+                context.go(AppRoutes.bookmarks);
+              }
+              ref.read(addFormVisibleProvider.notifier).show();
               return null;
             },
           ),

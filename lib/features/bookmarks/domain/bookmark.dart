@@ -1,15 +1,30 @@
-// TODO(story-1.2): replace with Freezed entity once `freezed` codegen runs
-// for this file. Holding a plain stub class for now so other features can
-// import this path without rewiring imports later.
+import 'package:freezed_annotation/freezed_annotation.dart';
 
-class Bookmark {
-  const Bookmark({
-    required this.id,
-    required this.url,
-    required this.title,
-  });
+import '../../../core/database/app_database.dart';
 
-  final String id;
-  final String url;
-  final String title;
+part 'bookmark.freezed.dart';
+
+@freezed
+abstract class Bookmark with _$Bookmark {
+  const factory Bookmark({
+    required String id,
+    required String url,
+    required String title,
+    String? notes,
+    String? folderId,
+    String? faviconBase64,
+    required DateTime createdAt,
+    required DateTime updatedAt,
+  }) = _Bookmark;
+
+  factory Bookmark.fromDrift(BookmarkRow row) => Bookmark(
+        id: row.id,
+        url: row.url,
+        title: row.title,
+        notes: row.notes,
+        folderId: row.folderId,
+        faviconBase64: row.faviconBase64,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(row.createdAt),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(row.updatedAt),
+      );
 }

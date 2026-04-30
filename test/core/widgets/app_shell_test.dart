@@ -1,15 +1,39 @@
+import 'package:bookmarks/core/error/app_error.dart';
+import 'package:bookmarks/core/error/result.dart';
 import 'package:bookmarks/core/router/app_router.dart';
 import 'package:bookmarks/core/theme/app_spacing.dart';
 import 'package:bookmarks/core/theme/app_theme.dart';
 import 'package:bookmarks/core/widgets/app_shell.dart';
 import 'package:bookmarks/core/widgets/sidebar.dart';
+import 'package:bookmarks/features/bookmarks/application/bookmark_providers.dart';
+import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
+import 'package:bookmarks/features/bookmarks/domain/i_bookmark_repository.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+class _FakeBookmarkRepository implements IBookmarkRepository {
+  @override
+  Stream<List<Bookmark>> watchAll() => Stream.value(const <Bookmark>[]);
+
+  @override
+  Future<Result<Bookmark, AppError>> getById(String id) async =>
+      const Err<Bookmark, AppError>(StorageError('not found'));
+
+  @override
+  Future<Result<Bookmark, AppError>> save(Bookmark bookmark) async =>
+      Ok<Bookmark, AppError>(bookmark);
+}
+
 Widget _buildApp() {
-  return MaterialApp.router(
-    theme: AppTheme.build(),
-    routerConfig: buildRouter(),
+  return ProviderScope(
+    overrides: [
+      bookmarkRepositoryProvider.overrideWithValue(_FakeBookmarkRepository()),
+    ],
+    child: MaterialApp.router(
+      theme: AppTheme.build(),
+      routerConfig: buildRouter(),
+    ),
   );
 }
 
