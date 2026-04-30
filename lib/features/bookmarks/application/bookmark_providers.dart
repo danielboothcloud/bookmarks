@@ -57,3 +57,37 @@ class AddFormVisibleNotifier extends Notifier<bool> {
 
 final addFormVisibleProvider =
     NotifierProvider<AddFormVisibleNotifier, bool>(AddFormVisibleNotifier.new);
+
+/// Holds the id of the bookmark currently shown in the detail pane. Storing
+/// only the id (rather than the whole [Bookmark]) keeps the detail pane in
+/// sync with mutations from elsewhere -- e.g. Story 1.3's metadata fetch
+/// updating favicon/title -- by deriving the live bookmark from
+/// [watchBookmarksProvider] inside [selectedBookmarkProvider].
+class SelectedBookmarkIdNotifier extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void select(String id) => state = id;
+  void clear() => state = null;
+}
+
+final selectedBookmarkIdProvider =
+    NotifierProvider<SelectedBookmarkIdNotifier, String?>(
+        SelectedBookmarkIdNotifier.new);
+
+/// The bookmark referenced by [selectedBookmarkIdProvider], joined against
+/// the live list from [watchBookmarksProvider]. Returns null when:
+///   - no selection is set,
+///   - the list hasn't emitted yet, or
+///   - the selected id is no longer in the list (e.g. deleted in Story 1.5).
+/// Callers can treat null as "render the empty placeholder" (AC7).
+final selectedBookmarkProvider = Provider<Bookmark?>((ref) {
+  final id = ref.watch(selectedBookmarkIdProvider);
+  if (id == null) return null;
+  final list = ref.watch(watchBookmarksProvider).value;
+  if (list == null) return null;
+  for (final b in list) {
+    if (b.id == id) return b;
+  }
+  return null;
+});

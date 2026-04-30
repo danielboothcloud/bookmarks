@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../features/bookmarks/application/bookmark_providers.dart';
+import '../../features/bookmarks/presentation/widgets/bookmark_detail_pane.dart';
 import '../router/app_router.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
@@ -94,38 +95,12 @@ class AppShell extends ConsumerWidget {
                     if (showDetailPane)
                       const FocusTraversalOrder(
                         order: NumericFocusOrder(4),
-                        child: _DetailPanePlaceholder(),
+                        child: BookmarkDetailPane(),
                       ),
                   ],
                 );
               },
             ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DetailPanePlaceholder extends StatelessWidget {
-  const _DetailPanePlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: AppSpacing.detailPaneWidth,
-      decoration: const BoxDecoration(
-        color: AppColors.surfaceContent,
-        border: Border(
-          left: BorderSide(color: AppColors.border),
-        ),
-      ),
-      child: const Center(
-        child: Text(
-          'Select a bookmark',
-          style: TextStyle(
-            color: AppColors.textMuted,
-            fontSize: 13,
           ),
         ),
       ),

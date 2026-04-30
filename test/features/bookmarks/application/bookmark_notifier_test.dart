@@ -234,6 +234,92 @@ void main() {
     });
 
     test(
+        'updateBookmark writes through repo with bumped updatedAt and clears '
+        'AsyncValue error (Story 1.4)', () async {
+      final repo = _RecordingRepository();
+      final container = _container(repo);
+      addTearDown(container.dispose);
+
+      final original = Bookmark(
+        id: 'fixed-id',
+        url: 'https://example.com',
+        title: 'Old Title',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1000),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+      );
+      final beforeMs = DateTime.now().millisecondsSinceEpoch;
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .updateBookmark(original.copyWith(title: 'New Title'));
+      await _drain();
+
+      final saved = repo.savedBookmarks.single;
+      expect(saved.id, 'fixed-id');
+      expect(saved.title, 'New Title');
+      expect(saved.createdAt, original.createdAt,
+          reason: 'updateBookmark must not touch createdAt');
+      expect(
+        saved.updatedAt.millisecondsSinceEpoch,
+        greaterThanOrEqualTo(beforeMs),
+        reason: 'updatedAt must be bumped to "now" by the notifier',
+      );
+
+      final state = container.read(bookmarkNotifierProvider);
+      expect(state.hasError, isFalse);
+      expect(state.hasValue, isTrue);
+    });
+
+    test(
+        'updateBookmark on Err sets AsyncValue.error so _SaveErrorBanner '
+        'surfaces (Story 1.4)', () async {
+      final repo = _RecordingRepository()
+        ..saveResult = (_) => const Err<Bookmark, AppError>(StorageError('boom'));
+      final container = _container(repo);
+      addTearDown(container.dispose);
+
+      final original = Bookmark(
+        id: 'fixed-id',
+        url: 'https://example.com',
+        title: 'Old',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1000),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+      );
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .updateBookmark(original.copyWith(title: 'New'));
+
+      final state = container.read(bookmarkNotifierProvider);
+      expect(state.hasError, isTrue);
+      expect(state.error, isA<StorageError>());
+    });
+
+    test(
+        'updateBookmark does NOT trigger a metadata fetch (Story 1.4: edits '
+        'are corrections, not fresh captures)', () async {
+      final repo = _RecordingRepository();
+      final fake = _FakeMetadataFetchService();
+      final container = _container(repo, metadataService: fake);
+      addTearDown(container.dispose);
+
+      final original = Bookmark(
+        id: 'id-1',
+        url: 'https://example.com',
+        title: 'Old',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1000),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+      );
+      await container
+          .read(bookmarkNotifierProvider.notifier)
+          .updateBookmark(original.copyWith(title: 'New'));
+      await _drain();
+
+      expect(repo.savedBookmarks.length, 1,
+          reason: 'no second save: metadata fetch must not run on update');
+      expect(fake.requestedUrls, isEmpty,
+          reason: 'metadata service must not be called on edit');
+    });
+
+    test(
         'post-fetch save Err does NOT pollute bookmarkNotifierProvider state '
         '(M3 + Story 1.2 _SaveErrorBanner contract)', () async {
       var saveCalls = 0;

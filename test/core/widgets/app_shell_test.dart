@@ -5,6 +5,7 @@ import 'package:bookmarks/core/theme/app_spacing.dart';
 import 'package:bookmarks/core/theme/app_theme.dart';
 import 'package:bookmarks/core/widgets/app_shell.dart';
 import 'package:bookmarks/core/widgets/sidebar.dart';
+import 'package:bookmarks/features/bookmarks/presentation/widgets/bookmark_detail_pane.dart';
 import 'package:bookmarks/features/bookmarks/application/bookmark_providers.dart';
 import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
 import 'package:bookmarks/features/bookmarks/domain/i_bookmark_repository.dart';
@@ -57,10 +58,20 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Select a bookmark'), findsNothing);
+      expect(find.byType(BookmarkDetailPane), findsNothing);
       expect(find.byType(Sidebar), findsOneWidget);
 
       final sidebar = tester.widget<Sidebar>(find.byType(Sidebar));
       expect(sidebar.collapsed, isFalse);
+    });
+
+    testWidgets('detail pane is rendered (not the old placeholder) at >= 900px',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(BookmarkDetailPane), findsOneWidget);
     });
 
     testWidgets('collapses sidebar at < 600px', (tester) async {

@@ -49,6 +49,23 @@ class BookmarkNotifier extends AsyncNotifier<void> {
     }
   }
 
+  /// Persists [bookmark] with a fresh `updatedAt`. Used by the detail-pane
+  /// inline edits (Story 1.4). Routes through this notifier (rather than the
+  /// repository directly) so save failures surface in the same `_SaveErrorBanner`
+  /// as `addBookmark`. **Does not** trigger a metadata fetch -- editing a URL
+  /// is a deliberate correction, not a fresh capture.
+  Future<void> updateBookmark(Bookmark bookmark) async {
+    final updated = bookmark.copyWith(updatedAt: DateTime.now());
+    state = const AsyncValue<void>.loading();
+    final result = await ref.read(bookmarkRepositoryProvider).save(updated);
+    switch (result) {
+      case Ok():
+        state = const AsyncValue<void>.data(null);
+      case Err(:final error):
+        state = AsyncValue<void>.error(error, StackTrace.current);
+    }
+  }
+
   Future<void> _fetchMetadata(Bookmark bookmark) async {
     // Mark in-flight synchronously (before any await) so the spinner appears
     // on the next frame.

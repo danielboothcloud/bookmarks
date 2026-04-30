@@ -47,12 +47,18 @@ dependencies:
   # Desktop window management
   window_manager: ^0.5.1
 
+  # URL launching (open bookmarks in the system default browser, AC4)
+  url_launcher: ^6.3.1
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+
+  # Used in tests to swap UrlLauncherPlatform.instance with a recording fake.
+  url_launcher_platform_interface: ^2.3.2
 
   # Code generation
   build_runner: ^2.4.13

@@ -15,6 +15,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:url_launcher_platform_interface/link.dart';
+import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 class _FakeRepo implements IBookmarkRepository {
   _FakeRepo(this._controller);
@@ -50,6 +52,26 @@ Bookmark _bm(String id, {String? title, DateTime? createdAt}) {
     createdAt: now,
     updatedAt: now,
   );
+}
+
+/// Records every launchUrl call so the double-tap test can assert that the
+/// list item routed through openExternal with the expected URL/mode.
+class _RecordingLauncher extends UrlLauncherPlatform {
+  final List<String> launchedUrls = [];
+  final List<LaunchOptions> launches = [];
+
+  @override
+  LinkDelegate? get linkDelegate => null;
+
+  @override
+  Future<bool> canLaunch(String url) async => true;
+
+  @override
+  Future<bool> launchUrl(String url, LaunchOptions options) async {
+    launchedUrls.add(url);
+    launches.add(options);
+    return true;
+  }
 }
 
 /// No-op metadata fetch service: returns empty UrlMetadata for every URL.
@@ -236,6 +258,97 @@ void main() {
     expect(find.byIcon(Icons.public), findsOneWidget);
     // No spinner because nothing is in flight in this scenario.
     expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets('single-tap on a list item updates selectedBookmarkIdProvider '
+      '(Story 1.4 AC1)', (tester) async {
+    final controller = StreamController<List<Bookmark>>.broadcast();
+    final repo = _FakeRepo(controller);
+    addTearDown(controller.close);
+
+    await tester.pumpWidget(_wrap(repo));
+    controller.add([_bm('one'), _bm('two')]);
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(BookmarkListScreen)),
+    );
+    expect(container.read(selectedBookmarkIdProvider), isNull);
+
+    await tester.tap(find.byType(BookmarkListItem).first);
+    // Single-tap fires after the double-tap recognizer's timeout when a
+    // sibling onDoubleTap is registered. Pump past kDoubleTapTimeout.
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
+
+    expect(container.read(selectedBookmarkIdProvider), 'one');
+  });
+
+  testWidgets('double-tap on a list item launches the URL externally '
+      '(Story 1.4 AC4)', (tester) async {
+    final originalLauncher = UrlLauncherPlatform.instance;
+    final recording = _RecordingLauncher();
+    UrlLauncherPlatform.instance = recording;
+    addTearDown(() => UrlLauncherPlatform.instance = originalLauncher);
+
+    final controller = StreamController<List<Bookmark>>.broadcast();
+    final repo = _FakeRepo(controller);
+    addTearDown(controller.close);
+
+    await tester.pumpWidget(_wrap(repo));
+    controller.add([_bm('one')]);
+    await tester.pumpAndSettle();
+
+    final pos = tester.getCenter(find.byType(BookmarkListItem));
+    await tester.tapAt(pos);
+    // Stay well under kDoubleTapTimeout (300ms) so the gesture recogniser
+    // forms a double-tap rather than two single-taps.
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tapAt(pos);
+    await tester.pumpAndSettle();
+
+    expect(recording.launchedUrls, ['https://example.com/one']);
+    expect(recording.launches.single.mode,
+        PreferredLaunchMode.externalApplication);
+  });
+
+  testWidgets('selected list item gains a distinct surface tint (Story 1.4)',
+      (tester) async {
+    final controller = StreamController<List<Bookmark>>.broadcast();
+    final repo = _FakeRepo(controller);
+    addTearDown(controller.close);
+
+    await tester.pumpWidget(_wrap(repo));
+    controller.add([_bm('one')]);
+    await tester.pumpAndSettle();
+
+    // Capture the unselected Material colour first.
+    final unselected = tester.widget<Material>(
+      find
+          .descendant(
+            of: find.byType(BookmarkListItem),
+            matching: find.byType(Material),
+          )
+          .first,
+    );
+    expect(unselected.color, Colors.transparent);
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(BookmarkListScreen)),
+    );
+    container.read(selectedBookmarkIdProvider.notifier).select('one');
+    await tester.pumpAndSettle();
+
+    final selected = tester.widget<Material>(
+      find
+          .descendant(
+            of: find.byType(BookmarkListItem),
+            matching: find.byType(Material),
+          )
+          .first,
+    );
+    expect(selected.color, isNot(Colors.transparent),
+        reason: 'selected item must be visually distinct from default');
   });
 
   testWidgets('URL field auto-focuses when form opens (AC1)', (tester) async {
