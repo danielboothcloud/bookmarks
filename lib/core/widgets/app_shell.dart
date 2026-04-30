@@ -47,6 +47,12 @@ class AppShell extends StatelessWidget {
               return null;
             },
           ),
+          DismissIntent: CallbackAction<DismissIntent>(
+            onInvoke: (_) {
+              FocusManager.instance.primaryFocus?.unfocus();
+              return null;
+            },
+          ),
         },
         child: FocusTraversalGroup(
           policy: OrderedTraversalPolicy(),
@@ -61,18 +67,28 @@ class AppShell extends StatelessWidget {
                     width < AppSpacing.sidebarCollapseBreakpoint;
                 return Row(
                   children: [
-                    Sidebar(
-                      navigationShell: navigationShell,
-                      collapsed: collapseSidebar,
+                    FocusTraversalOrder(
+                      order: const NumericFocusOrder(1),
+                      child: Sidebar(
+                        navigationShell: navigationShell,
+                        collapsed: collapseSidebar,
+                      ),
                     ),
+                    // Search bar will slot in here as order 2 in Story 3.1.
                     Expanded(
-                      child: Container(
-                        color: AppColors.surfaceContent,
-                        child: navigationShell,
+                      child: FocusTraversalOrder(
+                        order: const NumericFocusOrder(3),
+                        child: Container(
+                          color: AppColors.surfaceContent,
+                          child: navigationShell,
+                        ),
                       ),
                     ),
                     if (showDetailPane)
-                      const _DetailPanePlaceholder(),
+                      const FocusTraversalOrder(
+                        order: NumericFocusOrder(4),
+                        child: _DetailPanePlaceholder(),
+                      ),
                   ],
                 );
               },

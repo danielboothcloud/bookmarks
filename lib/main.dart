@@ -1,5 +1,6 @@
 import 'dart:io' show Platform;
 
+import 'package:drift/drift.dart' show Variable;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
@@ -29,7 +30,12 @@ Future<void> main() async {
   }
 
   // Eagerly open the local DB so first-frame reads are instant (NFR1).
+  // driftDatabase() returns a LazyDatabase that opens on first query, so we
+  // force the connection here before runApp.
   final database = AppDatabase();
+  await database
+      .customSelect('SELECT 1', variables: <Variable<Object>>[])
+      .getSingle();
 
   runApp(
     ProviderScope(

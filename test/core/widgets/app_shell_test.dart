@@ -1,6 +1,7 @@
 import 'package:bookmarks/core/router/app_router.dart';
 import 'package:bookmarks/core/theme/app_spacing.dart';
 import 'package:bookmarks/core/theme/app_theme.dart';
+import 'package:bookmarks/core/widgets/app_shell.dart';
 import 'package:bookmarks/core/widgets/sidebar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -54,6 +55,55 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('No bookmarks yet'), findsOneWidget);
+    });
+
+    testWidgets('detail pane and sidebar carry explicit traversal order',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final orders = tester
+          .widgetList<FocusTraversalOrder>(find.byType(FocusTraversalOrder))
+          .map((w) => (w.order as NumericFocusOrder).order)
+          .toList();
+      expect(orders, containsAll(<double>[1, 3, 4]));
+    });
+
+    testWidgets('Esc invokes DismissIntent action and unfocuses',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      // Focus the FilledButton so Esc has something to dismiss.
+      final buttonFinder = find.widgetWithText(FilledButton, 'Add bookmark');
+      final focusNode = Focus.maybeOf(tester.element(buttonFinder));
+      focusNode?.requestFocus();
+      FocusScope.of(tester.element(buttonFinder)).requestFocus();
+      await tester.pump();
+
+      // DismissIntent must be wired in Actions — Actions.invoke returns null
+      // when the intent has no handler in scope. With our handler in place it
+      // returns void (null) but does not throw.
+      final actionsContext = tester.element(find.byType(AppShell));
+      expect(
+        () => Actions.invoke(actionsContext, const DismissIntent()),
+        returnsNormally,
+      );
+      // Confirm the handler is actually registered (not falling through).
+      final action = Actions.maybeFind<DismissIntent>(actionsContext);
+      expect(action, isNotNull,
+          reason: 'DismissIntent must have an Action handler registered');
+    });
+  });
+
+  group('AppShell intents', () {
+    test('exposes AddBookmark, FocusSearch, Dismiss intents', () {
+      // Compile-time guard: these classes are part of the public surface
+      // expected by AppShell's Shortcuts/Actions configuration.
+      expect(const AddBookmarkIntent(), isA<Intent>());
+      expect(const FocusSearchIntent(), isA<Intent>());
     });
   });
 

@@ -14,12 +14,17 @@ class Sidebar extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
   final bool collapsed;
 
-  static const _items = <_SidebarItem>[
-    _SidebarItem(icon: Icons.bookmarks_outlined, label: 'All Bookmarks'),
-    _SidebarItem(icon: Icons.folder_outlined, label: 'Folders'),
-    _SidebarItem(icon: Icons.label_outlined, label: 'Tags'),
-    _SidebarItem(icon: Icons.settings_outlined, label: 'Settings'),
+  // Branch order matches StatefulShellRoute branches in app_router.dart.
+  static const _topItems = <_SidebarItem>[
+    _SidebarItem(icon: Icons.bookmarks_outlined, label: 'All Bookmarks', branchIndex: 0),
+    _SidebarItem(icon: Icons.folder_outlined, label: 'Folders', branchIndex: 1),
+    _SidebarItem(icon: Icons.label_outlined, label: 'Tags', branchIndex: 2),
   ];
+  static const _settingsItem = _SidebarItem(
+    icon: Icons.settings_outlined,
+    label: 'Settings',
+    branchIndex: 3,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -38,32 +43,30 @@ class Sidebar extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: AppSpacing.md),
-              ..._items.asMap().entries.map((entry) {
-                final index = entry.key;
-                final item = entry.value;
-                final isSelected = index == selected;
-                return _SidebarTile(
-                  item: item,
-                  isSelected: isSelected,
-                  collapsed: collapsed,
-                  onTap: () => navigationShell.goBranch(
-                    index,
-                    initialLocation: index == selected,
-                  ),
-                );
-              }),
-              const Spacer(),
-              if (!collapsed)
-                const Padding(
-                  padding: EdgeInsets.all(AppSpacing.md),
-                  child: Text(
-                    'Drive: not connected',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: AppColors.textSidebar,
+              ..._topItems.map((item) => _SidebarTile(
+                    item: item,
+                    isSelected: item.branchIndex == selected,
+                    collapsed: collapsed,
+                    onTap: () => navigationShell.goBranch(
+                      item.branchIndex,
+                      initialLocation: item.branchIndex == selected,
                     ),
-                  ),
+                  )),
+              const Spacer(),
+              _SidebarTile(
+                item: _settingsItem,
+                isSelected: _settingsItem.branchIndex == selected,
+                collapsed: collapsed,
+                onTap: () => navigationShell.goBranch(
+                  _settingsItem.branchIndex,
+                  initialLocation: _settingsItem.branchIndex == selected,
                 ),
+              ),
+              _SyncStatusIndicator(
+                // TODO(story-4.1): wire to real DriveSyncStatus provider.
+                status: SyncStatus.unavailable,
+                collapsed: collapsed,
+              ),
             ],
           ),
         ),
@@ -72,10 +75,66 @@ class Sidebar extends StatelessWidget {
   }
 }
 
+enum SyncStatus { synced, unsynced, unavailable }
+
+class _SyncStatusIndicator extends StatelessWidget {
+  const _SyncStatusIndicator({required this.status, required this.collapsed});
+
+  final SyncStatus status;
+  final bool collapsed;
+
+  @override
+  Widget build(BuildContext context) {
+    final (color, label) = switch (status) {
+      SyncStatus.synced => (AppColors.syncSynced, 'Drive: synced'),
+      SyncStatus.unsynced => (AppColors.syncUnsynced, 'Drive: pending'),
+      SyncStatus.unavailable => (AppColors.syncUnavailable, 'Drive: not connected'),
+    };
+    final dot = Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+      ),
+    );
+    if (collapsed) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+        child: Center(child: dot),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      child: Row(
+        children: [
+          dot,
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.textSidebar,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _SidebarItem {
   final IconData icon;
   final String label;
-  const _SidebarItem({required this.icon, required this.label});
+  final int branchIndex;
+  const _SidebarItem({
+    required this.icon,
+    required this.label,
+    required this.branchIndex,
+  });
 }
 
 class _SidebarTile extends StatelessWidget {
