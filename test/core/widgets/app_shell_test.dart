@@ -10,6 +10,7 @@ import 'package:bookmarks/features/bookmarks/application/bookmark_providers.dart
 import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
 import 'package:bookmarks/features/bookmarks/domain/i_bookmark_repository.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -172,6 +173,81 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(container.read(pendingDeleteIdProvider), isNull);
+    });
+
+    testWidgets(
+        'Delete keystroke fires DeleteSelectedBookmarkIntent (verifies the '
+        'SingleActivator binding, not just the Action wiring)',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedBookmarkIdProvider.notifier).select('id-key');
+      await tester.pumpAndSettle();
+
+      // Default focus sits on a non-EditableText scope inside AppShell's
+      // Shortcuts subtree, so the key event routes through the Shortcuts
+      // widget rather than landing on a text input.
+      await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingDeleteIdProvider), 'id-key');
+    });
+
+    testWidgets(
+        'Backspace keystroke fires DeleteSelectedBookmarkIntent '
+        '(macOS users press Backspace; AC1 enumerates both keys)',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedBookmarkIdProvider.notifier).select('id-bs');
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingDeleteIdProvider), 'id-bs');
+    });
+
+    testWidgets(
+        'Backspace with focus inside an EditableText does NOT prompt delete '
+        '(EditableText guard: AC1 must not break text editing)',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+
+      // Selection set so the action's other guard (selection != null) would
+      // otherwise allow the prompt to fire -- isolating the EditableText guard.
+      container.read(selectedBookmarkIdProvider.notifier).select('id-edit');
+      // Open the inline-add form; its URL TextField has autofocus.
+      container.read(addFormVisibleProvider.notifier).show();
+      await tester.pumpAndSettle();
+
+      // Precondition: focus is in an EditableText (the URL TextField).
+      final focused = FocusManager.instance.primaryFocus;
+      expect(
+        focused?.context?.findAncestorWidgetOfExactType<EditableText>(),
+        isNotNull,
+        reason: 'precondition: focus should be in the URL TextField',
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingDeleteIdProvider), isNull,
+          reason: 'EditableText guard must suppress the delete prompt so '
+              'Backspace deletes a character, not a bookmark');
     });
 
     testWidgets('AppDismissIntent: branch 1 -- clears pendingDelete first',

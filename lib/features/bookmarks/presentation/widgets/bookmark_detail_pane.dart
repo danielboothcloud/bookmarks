@@ -155,14 +155,29 @@ class _BookmarkDetailPaneState extends ConsumerState<BookmarkDetailPane> {
       }
     }
 
+    // Capture BEFORE clearing pendingDelete / dispatching delete -- once the
+    // stream emits the post-delete list, selectedBookmarkProvider derives null
+    // for the deleted id and the comparison loses meaning.
+    final wasSelected =
+        ref.read(selectedBookmarkIdProvider) == bookmark.id;
+
     ref.read(pendingDeleteIdProvider.notifier).clear();
     ref.read(bookmarkNotifierProvider.notifier).deleteBookmark(bookmark.id);
 
-    final selection = ref.read(selectedBookmarkIdProvider.notifier);
-    if (nextId != null) {
-      selection.select(nextId);
-    } else {
-      selection.clear();
+    // Only migrate selection when the deleted bookmark IS the selected one.
+    // Today every code path into _confirmDelete has the bookmark selected
+    // (trash icon shows on the selected detail-pane body; AppShell shortcut
+    // prompts the selected id). The guard is anti-fragility for any future
+    // surface (context menu, batch delete) that prompts a non-selected id --
+    // without it, a delete from such a surface would silently clobber the
+    // user's deliberate selection on a different bookmark.
+    if (wasSelected) {
+      final selection = ref.read(selectedBookmarkIdProvider.notifier);
+      if (nextId != null) {
+        selection.select(nextId);
+      } else {
+        selection.clear();
+      }
     }
   }
 

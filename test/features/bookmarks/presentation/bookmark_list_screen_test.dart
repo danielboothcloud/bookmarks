@@ -127,6 +127,30 @@ void main() {
     expect(find.byType(BookmarkListItem), findsNothing);
   });
 
+  testWidgets(
+      'EmptyState.noBookmarks renders when the stream transitions from a '
+      'single bookmark to empty (Story 1.5 AC4: deleting the last bookmark)',
+      (tester) async {
+    final controller = StreamController<List<Bookmark>>.broadcast();
+    final repo = _FakeRepo(controller);
+    addTearDown(controller.close);
+
+    await tester.pumpWidget(_wrap(repo));
+    // Start with one bookmark visible.
+    controller.add([_bm('only')]);
+    await tester.pumpAndSettle();
+    expect(find.byType(BookmarkListItem), findsOneWidget);
+    expect(find.text('No bookmarks yet'), findsNothing);
+
+    // Drift's watchAll() re-emits when the deleted row is removed; simulate
+    // the post-delete stream emission directly (per Story 1.5 task 9 spec).
+    controller.add(const <Bookmark>[]);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(BookmarkListItem), findsNothing);
+    expect(find.text('No bookmarks yet'), findsOneWidget);
+  });
+
   testWidgets('non-empty stream renders BookmarkListItem rows (AC4)',
       (tester) async {
     final controller = StreamController<List<Bookmark>>.broadcast();
