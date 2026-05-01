@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/folders/application/folder_notifier.dart';
+import '../../features/folders/application/folder_providers.dart';
+import '../../features/folders/presentation/widgets/folder_tree.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 
-class Sidebar extends StatelessWidget {
+class Sidebar extends ConsumerWidget {
   const Sidebar({
     required this.navigationShell,
     required this.collapsed,
@@ -27,7 +31,7 @@ class Sidebar extends StatelessWidget {
   );
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final selected = navigationShell.currentIndex;
     final width = collapsed ? AppSpacing.sidebarIconWidth : AppSpacing.sidebarWidth;
 
@@ -52,6 +56,23 @@ class Sidebar extends StatelessWidget {
                       initialLocation: item.branchIndex == selected,
                     ),
                   )),
+              if (!collapsed) ...[
+                const SizedBox(height: AppSpacing.md),
+                _SidebarSectionHeader(
+                  label: 'FOLDERS',
+                  onAdd: () async {
+                    final newId = await ref
+                        .read(folderNotifierProvider.notifier)
+                        .addFolder();
+                    if (newId != null) {
+                      ref
+                          .read(pendingFolderEditIdProvider.notifier)
+                          .start(newId);
+                    }
+                  },
+                ),
+                const FolderTree(),
+              ],
               const Spacer(),
               _SidebarTile(
                 item: _settingsItem,
@@ -195,6 +216,48 @@ class _SidebarTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SidebarSectionHeader extends StatelessWidget {
+  const _SidebarSectionHeader({required this.label, required this.onAdd});
+
+  final String label;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.xs,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                letterSpacing: 0.8,
+                color: AppColors.textSidebar,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: onAdd,
+            icon: const Icon(Icons.add, size: 16),
+            color: AppColors.textSidebar,
+            iconSize: 16,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+            tooltip: 'New folder',
+            splashRadius: 14,
+          ),
+        ],
       ),
     );
   }

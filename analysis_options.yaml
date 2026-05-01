@@ -5,6 +5,7 @@ analyzer:
     - "**/*.g.dart"
     - "**/*.freezed.dart"
     - "**/*.drift.dart"
+    - "test/generated/**"
   language:
     strict-casts: true
     strict-inference: true
