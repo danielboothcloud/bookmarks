@@ -182,6 +182,54 @@ void main() {
     expect(repo.savedFolders, isEmpty);
   });
 
+  test('renameFolder empty/whitespace clears stale error state', () async {
+    final repo = _RecordingFolderRepository();
+    final container = _container(repo);
+    addTearDown(container.dispose);
+
+    // Seed an error state via a failing rename on an unknown id.
+    await container
+        .read(folderNotifierProvider.notifier)
+        .renameFolder('missing', 'whatever');
+    expect(container.read(folderNotifierProvider).hasError, isTrue);
+
+    // A subsequent empty-name rename should clear the error -- treating
+    // empty as a calm cancel rather than preserving the phantom failure.
+    await container
+        .read(folderNotifierProvider.notifier)
+        .renameFolder('missing', '');
+
+    expect(container.read(folderNotifierProvider).hasError, isFalse);
+    expect(container.read(folderNotifierProvider).hasValue, isTrue);
+  });
+
+  test('renameFolder identical-name clears stale error state', () async {
+    final repo = _RecordingFolderRepository();
+    repo.store['f-1'] = Folder(
+      id: 'f-1',
+      name: 'Personal',
+      createdAt: DateTime.fromMillisecondsSinceEpoch(1000),
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+    );
+    final container = _container(repo);
+    addTearDown(container.dispose);
+
+    // Seed an error via a failing rename on a different (missing) id.
+    await container
+        .read(folderNotifierProvider.notifier)
+        .renameFolder('missing', 'whatever');
+    expect(container.read(folderNotifierProvider).hasError, isTrue);
+
+    // Identical-name rename short-circuits but should clear the prior error.
+    await container
+        .read(folderNotifierProvider.notifier)
+        .renameFolder('f-1', 'Personal');
+
+    expect(repo.savedFolders, isEmpty);
+    expect(container.read(folderNotifierProvider).hasError, isFalse);
+    expect(container.read(folderNotifierProvider).hasValue, isTrue);
+  });
+
   test(
       'renameFolder with unknown id does not call save and ends with '
       'hasError when getById returns Err', () async {

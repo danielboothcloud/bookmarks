@@ -38,11 +38,10 @@ class _FolderTreeEmpty extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
-        vertical: AppSpacing.xs,
-      ),
+    // Wrap in _FolderRowFrame so the empty-state text aligns with where folder
+    // names will appear once created -- avoids a ~16px horizontal shift when
+    // the first folder is added.
+    return const _FolderRowFrame(
       child: Text(
         'No folders yet',
         style: TextStyle(fontSize: 12, color: AppColors.textSidebar),

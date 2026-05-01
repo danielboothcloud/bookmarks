@@ -46,7 +46,13 @@ class FolderNotifier extends AsyncNotifier<void> {
   /// sync_queue churn once Story 4.2 wires triggers).
   Future<void> renameFolder(String id, String newName) async {
     final trimmed = newName.trim();
-    if (trimmed.isEmpty) return;
+    if (trimmed.isEmpty) {
+      // Empty/whitespace is a calm cancel-equivalent. Clear any stale error
+      // state from a prior call so consumers reading `state.hasError` don't
+      // see a phantom failure.
+      state = const AsyncValue<void>.data(null);
+      return;
+    }
     final getResult = await ref.read(folderRepositoryProvider).getById(id);
     switch (getResult) {
       case Err(:final error):
@@ -57,7 +63,12 @@ class FolderNotifier extends AsyncNotifier<void> {
         state = AsyncValue<void>.error(error, StackTrace.current);
         return;
       case Ok(:final value):
-        if (value.name == trimmed) return;
+        if (value.name == trimmed) {
+          // Identical-name no-op. Reset any stale error so consumers don't
+          // see a phantom failure from a prior call.
+          state = const AsyncValue<void>.data(null);
+          return;
+        }
         final updated = value.copyWith(
           name: trimmed,
           updatedAt: DateTime.now(),

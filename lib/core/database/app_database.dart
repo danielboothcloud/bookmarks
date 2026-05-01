@@ -25,9 +25,10 @@ class AppDatabase extends _$AppDatabase {
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async => m.createAll(),
         onUpgrade: (m, from, to) async {
-          // Sequential `if` (not `if/else if`): a user on v1 upgrading directly
-          // to v3 must apply BOTH the v1->v2 and v2->v3 deltas in order.
-          if (from == 1) {
+          // Each branch guards on `from < targetVersion` so deltas compose for
+          // skip-version upgrades (e.g. v1 -> v3 must apply BOTH v1->v2 and
+          // v2->v3). Equality checks would silently skip the missing delta.
+          if (from < 2) {
             await m.createTable(bookmarks);
             await m.createTable(syncQueue);
             await m.createIndex(
@@ -45,7 +46,7 @@ class AppDatabase extends _$AppDatabase {
               ),
             );
           }
-          if (from == 2) {
+          if (from < 3) {
             await m.createTable(folders);
             await m.createIndex(
               Index(
