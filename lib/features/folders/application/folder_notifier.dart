@@ -13,18 +13,28 @@ class FolderNotifier extends AsyncNotifier<void> {
   static const _uuid = Uuid();
   static const defaultName = 'New folder';
 
+  /// Anti-corruption iteration cap for [_wouldCreateCycle]. Typical real-world
+  /// folder depth is < 10; 256 is a paranoid ceiling that still terminates if
+  /// a sync merge ever produces a corrupted parent loop.
+  static const _cycleWalkLimit = 256;
+
   @override
   Future<void> build() async {}
 
-  /// Creates a root-level folder with the default name and returns its id.
-  /// The caller (sidebar `+` button) immediately sets
-  /// [pendingFolderEditIdProvider] to this id so the row enters inline
-  /// edit mode on the next reactive emission.
-  Future<String?> addFolder() async {
+  /// Creates a folder with the default name and returns its id. When
+  /// [parentId] is non-null the new folder is nested under that parent and
+  /// the parent is auto-expanded so the new child row is immediately visible
+  /// (Story 2.2 AC1 / AC2 hierarchy-correctness). When [parentId] is null the
+  /// folder is created at the root (Story 2.1's behaviour preserved). The
+  /// caller (sidebar `+` button) immediately sets [pendingFolderEditIdProvider]
+  /// to this id so the row enters inline edit mode on the next reactive
+  /// emission.
+  Future<String?> addFolder({String? parentId}) async {
     final now = DateTime.now();
     final folder = Folder(
       id: _uuid.v4(),
       name: defaultName,
+      parentId: parentId,
       createdAt: now,
       updatedAt: now,
     );
@@ -33,6 +43,12 @@ class FolderNotifier extends AsyncNotifier<void> {
     switch (result) {
       case Ok():
         state = const AsyncValue<void>.data(null);
+        if (parentId != null) {
+          // Hierarchy-correctness: a hidden child is a UI bug. Limited to
+          // mutations that change parent membership (NOT rename) so collapsed
+          // folders don't pop open on every save.
+          ref.read(expandedFolderIdsProvider.notifier).expand(parentId);
+        }
         return folder.id;
       case Err(:final error):
         state = AsyncValue<void>.error(error, StackTrace.current);
@@ -83,6 +99,84 @@ class FolderNotifier extends AsyncNotifier<void> {
             state = AsyncValue<void>.error(error, StackTrace.current);
         }
     }
+  }
+
+  /// Reparents [folderId] under [newParentId] (null = move to root). Silently
+  /// rejects self-targets, descendant-targets (would form a cycle) and moves
+  /// to the current parent (idempotent). The drag UX surfaces rejection via
+  /// the row's snap-back animation -- no banner, no Err -- matching the
+  /// renameFolder-empty-name calm-failure pattern.
+  Future<void> moveFolder(String folderId, String? newParentId) async {
+    // Self-target guard.
+    if (folderId == newParentId) {
+      state = const AsyncValue<void>.data(null);
+      return;
+    }
+    if (newParentId != null) {
+      final wouldLoop = await _wouldCreateCycle(folderId, newParentId);
+      if (wouldLoop) {
+        state = const AsyncValue<void>.data(null);
+        return;
+      }
+    }
+    final getResult =
+        await ref.read(folderRepositoryProvider).getById(folderId);
+    switch (getResult) {
+      case Err(:final error):
+        state = AsyncValue<void>.error(error, StackTrace.current);
+        return;
+      case Ok(:final value):
+        if (value.parentId == newParentId) {
+          // Already at this parent -- idempotent no-op. Reset stale error.
+          state = const AsyncValue<void>.data(null);
+          return;
+        }
+        final updated = value.copyWith(
+          parentId: newParentId,
+          updatedAt: DateTime.now(),
+        );
+        state = const AsyncValue<void>.loading();
+        final saveResult =
+            await ref.read(folderRepositoryProvider).save(updated);
+        switch (saveResult) {
+          case Ok():
+            state = const AsyncValue<void>.data(null);
+            if (newParentId != null) {
+              ref
+                  .read(expandedFolderIdsProvider.notifier)
+                  .expand(newParentId);
+            }
+          case Err(:final error):
+            state = AsyncValue<void>.error(error, StackTrace.current);
+        }
+    }
+  }
+
+  /// Walks the ancestor chain starting at [candidateAncestorId]. Returns true
+  /// iff [movingFolderId] appears anywhere in the chain -- meaning moving
+  /// [movingFolderId] under [candidateAncestorId] would close a loop. O(depth)
+  /// -- typical depths < 10. Iterations are hard-capped so a corrupted DB
+  /// with a parent loop cannot infinite-loop the move handler.
+  Future<bool> _wouldCreateCycle(
+    String movingFolderId,
+    String candidateAncestorId,
+  ) async {
+    final repo = ref.read(folderRepositoryProvider);
+    String? current = candidateAncestorId;
+    for (var i = 0; i < _cycleWalkLimit && current != null; i++) {
+      if (current == movingFolderId) return true;
+      final result = await repo.getById(current);
+      switch (result) {
+        case Err():
+          // Broken chain (parent vanished). Treat as "no cycle"; Drift will
+          // accept the move and the stale parentId becomes orphaned at the
+          // next sync merge.
+          return false;
+        case Ok(:final value):
+          current = value.parentId;
+      }
+    }
+    return false;
   }
 }
 

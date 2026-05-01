@@ -51,29 +51,83 @@ class Sidebar extends ConsumerWidget {
                     item: item,
                     isSelected: item.branchIndex == selected,
                     collapsed: collapsed,
-                    onTap: () => navigationShell.goBranch(
-                      item.branchIndex,
-                      initialLocation: item.branchIndex == selected,
-                    ),
+                    onTap: () {
+                      // Folders is the only navrail entry that opens the
+                      // folder content view. Clearing the selection on tap
+                      // gives the user a fresh "Select a folder" placeholder
+                      // (AC5) instead of restoring the last-viewed folder.
+                      // Other branches don't render folder content -- their
+                      // selection is dormant, so leave it intact.
+                      if (item.branchIndex == 1) {
+                        ref
+                            .read(selectedFolderIdProvider.notifier)
+                            .clear();
+                      }
+                      navigationShell.goBranch(
+                        item.branchIndex,
+                        initialLocation: item.branchIndex == selected,
+                      );
+                    },
                   )),
               if (!collapsed) ...[
                 const SizedBox(height: AppSpacing.md),
-                _SidebarSectionHeader(
-                  label: 'FOLDERS',
-                  onAdd: () async {
-                    final newId = await ref
-                        .read(folderNotifierProvider.notifier)
-                        .addFolder();
-                    if (newId != null) {
-                      ref
-                          .read(pendingFolderEditIdProvider.notifier)
-                          .start(newId);
-                    }
-                  },
+                // Flexible + SingleChildScrollView so a tall folder tree
+                // (nested via Story 2.2) scrolls within the available
+                // space rather than pushing Settings / SyncStatus off the
+                // bottom edge. Section header scrolls with the tree -- a
+                // sticky header would need an extra layout layer for
+                // marginal benefit when the tree is short.
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        DragTarget<String>(
+                          onWillAcceptWithDetails: (_) => true,
+                          onAcceptWithDetails: (details) {
+                            ref
+                                .read(folderNotifierProvider.notifier)
+                                .moveFolder(details.data, null);
+                          },
+                          builder: (context, candidateData, _) {
+                            final isHoverTarget = candidateData.isNotEmpty;
+                            return Container(
+                              color: isHoverTarget
+                                  ? AppColors.accent
+                                      .withValues(alpha: 0.15)
+                                  : null,
+                              child: _SidebarSectionHeader(
+                                label: 'FOLDERS',
+                                onAdd: () async {
+                                  // Selection-aware create. Null selection
+                                  // -> root-level (Story 2.1 behaviour
+                                  // preserved). Non-null -> child of the
+                                  // selected folder; the notifier auto-
+                                  // expands the parent so the new child is
+                                  // visible (Story 2.2 Task 3).
+                                  final selectedId =
+                                      ref.read(selectedFolderIdProvider);
+                                  final newId = await ref
+                                      .read(folderNotifierProvider.notifier)
+                                      .addFolder(parentId: selectedId);
+                                  if (newId != null) {
+                                    ref
+                                        .read(pendingFolderEditIdProvider
+                                            .notifier)
+                                        .start(newId);
+                                  }
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                        const FolderTree(),
+                      ],
+                    ),
+                  ),
                 ),
-                const FolderTree(),
               ],
-              const Spacer(),
+              if (collapsed) const Spacer(),
               _SidebarTile(
                 item: _settingsItem,
                 isSelected: _settingsItem.branchIndex == selected,

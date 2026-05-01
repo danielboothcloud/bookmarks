@@ -11,14 +11,17 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingFolderNotifier extends FolderNotifier {
   int addCalls = 0;
+  String? lastAddParentId;
   final List<List<String>> renameCalls = <List<String>>[];
+  final List<List<String?>> moveCalls = <List<String?>>[];
 
   @override
   Future<void> build() async {}
 
   @override
-  Future<String?> addFolder() async {
+  Future<String?> addFolder({String? parentId}) async {
     addCalls += 1;
+    lastAddParentId = parentId;
     return 'fake-new-id';
   }
 
@@ -26,17 +29,24 @@ class _RecordingFolderNotifier extends FolderNotifier {
   Future<void> renameFolder(String id, String newName) async {
     renameCalls.add([id, newName]);
   }
+
+  @override
+  Future<void> moveFolder(String folderId, String? newParentId) async {
+    moveCalls.add([folderId, newParentId]);
+  }
 }
 
 Folder _f(
   String id, {
   required String name,
+  String? parentId,
   int createdAt = 1000,
   int? updatedAt,
 }) =>
     Folder(
       id: id,
       name: name,
+      parentId: parentId,
       createdAt: DateTime.fromMillisecondsSinceEpoch(createdAt),
       updatedAt: DateTime.fromMillisecondsSinceEpoch(updatedAt ?? createdAt),
     );
@@ -292,5 +302,261 @@ void main() {
         reason: 'A row state must persist across stream re-emissions');
     expect(identical(stateB1, stateB2), isTrue,
         reason: 'B row state must persist across stream re-emissions');
+  });
+
+  // ------------------------------------------------------------------
+  // Story 2.2: tree shape, chevron, drag, navigate
+  // ------------------------------------------------------------------
+
+  testWidgets(
+      'Chevron renders only when hasChildren; not for childless rows',
+      (tester) async {
+    final s = _setup();
+    s.container
+        .read(expandedFolderIdsProvider.notifier)
+        .expand('a'); // ensure b is rendered
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([
+      _f('a', name: 'A', parentId: null, createdAt: 1000),
+      _f('b', name: 'B', parentId: 'a', createdAt: 2000),
+    ]);
+    await tester.pump();
+
+    // A has child B -> exactly one chevron icon. B has no children -> none.
+    expect(find.byIcon(Icons.chevron_right), findsOneWidget);
+  });
+
+  testWidgets(
+      'Chevron tap toggles expandedFolderIdsProvider; row InkWell does NOT '
+      'fire (HitTestBehavior.opaque consumes it)', (tester) async {
+    final s = _setup();
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([
+      _f('a', name: 'A', parentId: null, createdAt: 1000),
+      _f('b', name: 'B', parentId: 'a', createdAt: 2000),
+    ]);
+    await tester.pump();
+
+    expect(s.container.read(expandedFolderIdsProvider), isEmpty);
+    expect(s.container.read(selectedFolderIdProvider), isNull);
+
+    // Find the chevron's GestureDetector (the opaque one wrapping the
+    // chevron Icon). tester.tap on the icon goes through the gesture arena
+    // which doesn't always pick the right detector in tests, so invoke the
+    // callback directly.
+    final chevronGesture = tester.widget<GestureDetector>(
+      find
+          .ancestor(
+            of: find.byIcon(Icons.chevron_right),
+            matching: find.byWidgetPredicate((w) =>
+                w is GestureDetector &&
+                w.behavior == HitTestBehavior.opaque),
+          )
+          .first,
+    );
+    chevronGesture.onTap!();
+    await tester.pump();
+
+    expect(s.container.read(expandedFolderIdsProvider), {'a'});
+    expect(s.container.read(selectedFolderIdProvider), isNull,
+        reason: 'chevron tap must NOT propagate to the row InkWell');
+
+    // Tap again -> collapse.
+    chevronGesture.onTap!();
+    await tester.pump();
+    expect(s.container.read(expandedFolderIdsProvider), <String>{});
+  });
+
+  testWidgets(
+      'Children render only when parent is expanded; collapsed children '
+      'are skipped from the widget tree', (tester) async {
+    final s = _setup();
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([
+      _f('a', name: 'A', parentId: null, createdAt: 1000),
+      _f('b', name: 'B', parentId: 'a', createdAt: 2000),
+    ]);
+    await tester.pump();
+
+    // a is collapsed by default -> b's row not in the tree.
+    expect(find.byKey(const ValueKey('b')), findsNothing);
+
+    s.container.read(expandedFolderIdsProvider.notifier).expand('a');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('b')), findsOneWidget);
+
+    s.container.read(expandedFolderIdsProvider.notifier).collapse('a');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('b')), findsNothing);
+  });
+
+  testWidgets(
+      'Single-tap on row updates selectedFolderIdProvider; idempotent on '
+      'already-selected', (tester) async {
+    final s = _setup();
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([_f('a', name: 'A', parentId: null)]);
+    await tester.pump();
+
+    // Find the InkWell inside the row and invoke its onTap directly --
+    // bypasses GoRouter (no shell in this test harness; the InkWell handler
+    // falls back to GoRouter.of which isn't installed in this MaterialApp,
+    // so we just stub by reading the provider state.)
+    final inkWells = tester
+        .widgetList<InkWell>(find.byType(InkWell))
+        .where((w) => w.onTap != null)
+        .toList();
+    // Pick the InkWell that toggles selection -- the row's outer InkWell.
+    // There is only one row so it's the only InkWell with an onTap here.
+    expect(inkWells, isNotEmpty);
+    inkWells.first.onTap!();
+    await tester.pump();
+
+    expect(s.container.read(selectedFolderIdProvider), 'a');
+
+    // Re-tap: idempotent. Spy by re-reading; the `if (isSelected) return`
+    // guard means the notifier's state must remain unchanged (still 'a').
+    inkWells.first.onTap!();
+    await tester.pump();
+    expect(s.container.read(selectedFolderIdProvider), 'a');
+  });
+
+  testWidgets('Selected folder gets accent text colour; sibling stays muted',
+      (tester) async {
+    final s = _setup();
+    s.container.read(selectedFolderIdProvider.notifier).select('a');
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([
+      _f('a', name: 'A', parentId: null, createdAt: 1000),
+      _f('c', name: 'C', parentId: null, createdAt: 2000),
+    ]);
+    await tester.pump();
+
+    final aText = tester.widget<Text>(find.text('A'));
+    final cText = tester.widget<Text>(find.text('C'));
+    expect(aText.style?.color?.toARGB32(),
+        const Color(0xFFD05A58).toARGB32(),
+        reason: 'A is selected -> accent colour');
+    expect(cText.style?.color?.toARGB32(),
+        const Color(0xFFABABAB).toARGB32(),
+        reason: 'C is unselected -> textSidebar colour');
+  });
+
+  testWidgets(
+      'Drag onto another folder calls moveFolder via DragTarget.onAccept',
+      (tester) async {
+    final s = _setup();
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([
+      _f('a', name: 'A', parentId: null, createdAt: 1000),
+      _f('b', name: 'B', parentId: null, createdAt: 2000),
+    ]);
+    await tester.pump();
+
+    // Find each FolderRow's DragTarget and invoke onAcceptWithDetails.
+    // Drag-and-drop testing in Flutter is fiddly; the documented pattern
+    // (also used by Story 2.1's onTapOutside test) is to invoke the
+    // callback directly.
+    final dragTargets = tester
+        .widgetList<DragTarget<String>>(find.byType(DragTarget<String>))
+        .toList();
+    // The second target is B's row (row order in tree = 'a','b').
+    expect(dragTargets.length, greaterThanOrEqualTo(2));
+    final targetB = dragTargets[1];
+
+    // Validate willAccept first: dragging A onto B should be accepted.
+    final willAccept = targetB.onWillAcceptWithDetails!(
+      DragTargetDetails<String>(
+        data: 'a',
+        offset: Offset.zero,
+      ),
+    );
+    expect(willAccept, isTrue);
+
+    targetB.onAcceptWithDetails!(
+      DragTargetDetails<String>(
+        data: 'a',
+        offset: Offset.zero,
+      ),
+    );
+    await tester.pump();
+
+    final notifier = _readNotifier(s.container);
+    expect(notifier.moveCalls, [
+      ['a', 'b']
+    ]);
+  });
+
+  testWidgets('Drag onto self is rejected at onWillAccept', (tester) async {
+    final s = _setup();
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([_f('a', name: 'A', parentId: null)]);
+    await tester.pump();
+
+    final targetA = tester
+        .widgetList<DragTarget<String>>(find.byType(DragTarget<String>))
+        .first;
+    final willAccept = targetA.onWillAcceptWithDetails!(
+      DragTargetDetails<String>(
+        data: 'a',
+        offset: Offset.zero,
+      ),
+    );
+    expect(willAccept, isFalse);
+  });
+
+  testWidgets('Drag onto own descendant is rejected at onWillAccept',
+      (tester) async {
+    final s = _setup();
+    s.container.read(expandedFolderIdsProvider.notifier).expand('a');
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([
+      _f('a', name: 'A', parentId: null, createdAt: 1000),
+      _f('b', name: 'B', parentId: 'a', createdAt: 2000),
+    ]);
+    await tester.pump();
+
+    final dragTargets = tester
+        .widgetList<DragTarget<String>>(find.byType(DragTarget<String>))
+        .toList();
+    // Find the target on B's row (B is the descendant of A).
+    expect(dragTargets.length, greaterThanOrEqualTo(2));
+    final targetB = dragTargets[1];
+
+    // Dragging A onto B (its own child) should be rejected.
+    final willAccept = targetB.onWillAcceptWithDetails!(
+      DragTargetDetails<String>(
+        data: 'a',
+        offset: Offset.zero,
+      ),
+    );
+    expect(willAccept, isFalse);
+  });
+
+  testWidgets(
+      'Indentation: child rows have greater leading padding than their '
+      'parent (per-depth 16px)', (tester) async {
+    final s = _setup();
+    s.container.read(expandedFolderIdsProvider.notifier).expand('a');
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([
+      _f('a', name: 'A', parentId: null, createdAt: 1000),
+      _f('b', name: 'B', parentId: 'a', createdAt: 2000),
+    ]);
+    await tester.pump();
+
+    final aRect = tester.getTopLeft(find.text('A'));
+    final bRect = tester.getTopLeft(find.text('B'));
+    // B is one depth deeper than A -> exactly 16px more leading padding.
+    expect(bRect.dx - aRect.dx, closeTo(16.0, 0.01));
   });
 }
