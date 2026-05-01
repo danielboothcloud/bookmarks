@@ -542,6 +542,46 @@ void main() {
   });
 
   testWidgets(
+      'Edit-mode row remains a DragTarget so drops on a folder being '
+      'renamed still call moveFolder', (tester) async {
+    final s = _setup();
+
+    // Put 'a' into edit mode BEFORE rendering so the build path enters
+    // the edit branch.
+    s.container.read(pendingFolderEditIdProvider.notifier).start('a');
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([
+      _f('a', name: 'A', parentId: null, createdAt: 1000),
+      _f('b', name: 'B', parentId: null, createdAt: 2000),
+    ]);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // Confirm 'a' is in edit mode (TextField present in that row).
+    expect(find.byType(TextField), findsOneWidget);
+
+    // Find the DragTarget for row 'a' (its key is on the FolderRow which is
+    // inside the DragTarget builder). DragTargets in this tree are
+    // FolderRow-scoped; first DragTarget corresponds to row 'a'.
+    final dragTargets = tester
+        .widgetList<DragTarget<String>>(find.byType(DragTarget<String>))
+        .toList();
+    expect(dragTargets.length, greaterThanOrEqualTo(2));
+    final targetA = dragTargets.first;
+
+    // Drop B onto A while A is being renamed -- moveFolder must still fire.
+    targetA.onAcceptWithDetails!(
+      DragTargetDetails<String>(data: 'b', offset: Offset.zero),
+    );
+    await tester.pump();
+
+    expect(_readNotifier(s.container).moveCalls, [
+      ['b', 'a']
+    ]);
+  });
+
+  testWidgets(
       'Indentation: child rows have greater leading padding than their '
       'parent (per-depth 16px)', (tester) async {
     final s = _setup();

@@ -72,11 +72,15 @@ class FaviconWidget extends ConsumerWidget {
       );
     }
     if (isInFlight) {
-      return const Center(
+      // Scale the spinner with the slot. 60% matches the original 12-in-20
+      // ratio so list views look unchanged; card (28) and detail (36) get
+      // proportionally larger spinners instead of a stuck-looking 12px one.
+      final spinnerSize = size * 0.6;
+      return Center(
         child: SizedBox(
-          width: 12,
-          height: 12,
-          child: CircularProgressIndicator(
+          width: spinnerSize,
+          height: spinnerSize,
+          child: const CircularProgressIndicator(
             strokeWidth: 1.5,
             valueColor: AlwaysStoppedAnimation<Color>(AppColors.accent),
           ),

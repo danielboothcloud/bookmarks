@@ -86,6 +86,35 @@ void main() {
     expect(tester.getSize(find.byKey(key)), const Size(36, 36));
   });
 
+  testWidgets(
+      'in-flight spinner scales with size (60% of slot, not hard-coded 12)',
+      (tester) async {
+    // size: 28 (card) -> spinner should be 28 * 0.6 = 16.8 px, NOT 12.
+    await tester.pumpWidget(_wrap(
+      const FaviconWidget(bookmarkId: 'b1', faviconBase64: null, size: 28),
+      inFlight: {'b1'},
+    ));
+
+    final spinnerSize =
+        tester.getSize(find.byType(CircularProgressIndicator));
+    expect(spinnerSize.width, closeTo(28 * 0.6, 0.01));
+    expect(spinnerSize.height, closeTo(28 * 0.6, 0.01));
+  });
+
+  testWidgets(
+      'in-flight spinner at default size (20) keeps the original 12px '
+      'visual ratio', (tester) async {
+    await tester.pumpWidget(_wrap(
+      const FaviconWidget(bookmarkId: 'b1', faviconBase64: null),
+      inFlight: {'b1'},
+    ));
+
+    final spinnerSize =
+        tester.getSize(find.byType(CircularProgressIndicator));
+    // 20 * 0.6 = 12 -- preserves the list-view appearance from before the fix.
+    expect(spinnerSize.width, closeTo(12.0, 0.01));
+  });
+
   testWidgets('malformed base64 falls through to placeholder (no throw)',
       (tester) async {
     await tester.pumpWidget(_wrap(

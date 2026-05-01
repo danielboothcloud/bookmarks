@@ -271,6 +271,41 @@ void main() {
   });
 
   testWidgets(
+      'FOLDERS header onWillAccept REJECTS unknown ids (e.g. bookmark drag) '
+      'and ACCEPTS known folder ids', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    final f = Folder(
+      id: 'real-folder',
+      name: 'Real',
+      createdAt: DateTime.fromMillisecondsSinceEpoch(1000),
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+    );
+    final container = _container(folderStream: Stream.value([f]));
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(_buildApp(container: container));
+    await tester.pump();
+    await tester.pump();
+
+    final headerTarget = tester
+        .widgetList<DragTarget<String>>(find.byType(DragTarget<String>))
+        .first;
+
+    final acceptsKnown = headerTarget.onWillAcceptWithDetails!(
+      DragTargetDetails<String>(data: 'real-folder', offset: Offset.zero),
+    );
+    final acceptsUnknown = headerTarget.onWillAcceptWithDetails!(
+      DragTargetDetails<String>(data: 'bookmark-id', offset: Offset.zero),
+    );
+
+    expect(acceptsKnown, isTrue);
+    expect(acceptsUnknown, isFalse,
+        reason: 'header must reject non-folder drags so future bookmark '
+            'Draggable<String> usage does not silently moveFolder() a '
+            'bookmark id');
+  });
+
+  testWidgets(
       'Folders navrail tap clears selectedFolderIdProvider',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1200, 800));

@@ -171,13 +171,8 @@ class _FolderRowState extends ConsumerState<FolderRow> {
     }
     _wasEditing = isEditing;
 
-    if (isEditing) {
-      return _buildEditRow(context);
-    }
-    return _buildDisplayRow(context);
-  }
-
-  Widget _buildDisplayRow(BuildContext context) {
+    // DragTarget wraps both modes so a row mid-rename can still accept drops
+    // (otherwise a paused edit silently rejects all drags).
     return DragTarget<String>(
       onWillAcceptWithDetails: (details) {
         final draggedId = details.data;
@@ -195,24 +190,30 @@ class _FolderRowState extends ConsumerState<FolderRow> {
       },
       builder: (context, candidateData, _) {
         final isHoverTarget = candidateData.isNotEmpty;
-        return Draggable<String>(
-          data: widget.folder.id,
-          // Plain Draggable uses ImmediateMultiDragGestureRecognizer: drag
-          // activates only after the pointer travels past kTouchSlop (~18px).
-          // A static click never triggers it, so the tap reaches the
-          // wrapping InkWell.onTap. (Story 2.2 originally specified
-          // LongPressDraggable(delay: zero) -- that misuses the long-press
-          // recognizer: every pointerdown classifies as a drag start, which
-          // breaks tap-to-select entirely. Plain Draggable is the correct
-          // desktop "click-to-select, drag-to-move" idiom.)
-          feedback: _DragFeedback(name: widget.folder.name),
-          childWhenDragging: Opacity(
-            opacity: 0.4,
-            child: _buildDisplayRowBody(context, isHoverTarget),
-          ),
-          child: _buildDisplayRowBody(context, isHoverTarget),
-        );
+        if (isEditing) {
+          return _buildEditRow(context, isHoverTarget);
+        }
+        return _buildDisplayRow(context, isHoverTarget);
       },
+    );
+  }
+
+  Widget _buildDisplayRow(BuildContext context, bool isHoverTarget) {
+    // Plain Draggable uses ImmediateMultiDragGestureRecognizer: drag activates
+    // only after the pointer travels past kTouchSlop (~18px). A static click
+    // never triggers it, so the tap reaches the wrapping InkWell.onTap.
+    // (Story 2.2 originally specified LongPressDraggable(delay: zero) -- that
+    // misuses the long-press recognizer: every pointerdown classifies as a
+    // drag start, which breaks tap-to-select entirely. Plain Draggable is the
+    // correct desktop "click-to-select, drag-to-move" idiom.)
+    return Draggable<String>(
+      data: widget.folder.id,
+      feedback: _DragFeedback(name: widget.folder.name),
+      childWhenDragging: Opacity(
+        opacity: 0.4,
+        child: _buildDisplayRowBody(context, isHoverTarget),
+      ),
+      child: _buildDisplayRowBody(context, isHoverTarget),
     );
   }
 
@@ -226,20 +227,25 @@ class _FolderRowState extends ConsumerState<FolderRow> {
       // TODO(post-2.2): right-click context menu for Rename/Delete/Move-to.
       child: InkWell(
         onTap: () {
-          // Idempotent: clicking the already-selected folder is a no-op
-          // (prevents scroll-reset / re-render flicker per AC4).
-          if (isSelected) return;
-          ref
-              .read(selectedFolderIdProvider.notifier)
-              .select(widget.folder.id);
           // Navigate to the Folders branch of the StatefulShellRoute. The
           // navrail will reflect the active branch automatically.
           final shell = StatefulNavigationShell.maybeOf(context);
+          final alreadyOnFolders =
+              shell?.currentIndex == _foldersBranchIndex;
+          // Idempotent ONLY when already on /folders viewing this folder
+          // (AC4 "no scroll reset, no re-fetch flicker"). If the user is on
+          // another branch -- All Bookmarks/Tags/Settings, which don't clear
+          // selection per Task 6 -- a re-tap must still navigate back.
+          if (isSelected && alreadyOnFolders) return;
+          if (!isSelected) {
+            ref
+                .read(selectedFolderIdProvider.notifier)
+                .select(widget.folder.id);
+          }
           if (shell != null) {
             shell.goBranch(
               _foldersBranchIndex,
-              initialLocation:
-                  shell.currentIndex == _foldersBranchIndex,
+              initialLocation: alreadyOnFolders,
             );
           } else {
             // maybeOf rather than of: in tests (and theoretically outside a
@@ -286,7 +292,7 @@ class _FolderRowState extends ConsumerState<FolderRow> {
     return null;
   }
 
-  Widget _buildEditRow(BuildContext context) {
+  Widget _buildEditRow(BuildContext context, bool isHoverTarget) {
     return Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{
         SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
@@ -303,30 +309,35 @@ class _FolderRowState extends ConsumerState<FolderRow> {
             },
           ),
         },
-        child: _FolderRowFrame(
-          depth: widget.depth,
-          hasChildren: widget.hasChildren,
-          isExpanded: widget.isExpanded,
-          onChevronTap: widget.hasChildren
-              ? () => ref
-                  .read(expandedFolderIdsProvider.notifier)
-                  .toggle(widget.folder.id)
+        child: Container(
+          color: isHoverTarget
+              ? AppColors.accent.withValues(alpha: 0.15)
               : null,
-          child: TextField(
-            controller: _controller,
-            focusNode: _focusNode,
-            style: const TextStyle(
-              fontSize: 13,
-              color: AppColors.textSidebar,
+          child: _FolderRowFrame(
+            depth: widget.depth,
+            hasChildren: widget.hasChildren,
+            isExpanded: widget.isExpanded,
+            onChevronTap: widget.hasChildren
+                ? () => ref
+                    .read(expandedFolderIdsProvider.notifier)
+                    .toggle(widget.folder.id)
+                : null,
+            child: TextField(
+              controller: _controller,
+              focusNode: _focusNode,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppColors.textSidebar,
+              ),
+              cursorColor: AppColors.accent,
+              decoration: const InputDecoration(
+                isCollapsed: true,
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+              ),
+              onSubmitted: _commit,
+              onTapOutside: (_) => _commit(_controller.text),
             ),
-            cursorColor: AppColors.accent,
-            decoration: const InputDecoration(
-              isCollapsed: true,
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.zero,
-            ),
-            onSubmitted: _commit,
-            onTapOutside: (_) => _commit(_controller.text),
           ),
         ),
       ),

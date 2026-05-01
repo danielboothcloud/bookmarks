@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../features/folders/application/folder_notifier.dart';
 import '../../features/folders/application/folder_providers.dart';
+import '../../features/folders/domain/folder.dart';
 import '../../features/folders/presentation/widgets/folder_tree.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
@@ -83,7 +84,18 @@ class Sidebar extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         DragTarget<String>(
-                          onWillAcceptWithDetails: (_) => true,
+                          // Validate the dragged id is a known folder. Story
+                          // 2.3+ will introduce bookmark Draggable<String> on
+                          // the same generic; without this guard the header
+                          // would visually accept bookmark drags and the
+                          // notifier would Err on the unknown id.
+                          onWillAcceptWithDetails: (details) {
+                            final folders =
+                                ref.read(watchFoldersProvider).value ??
+                                    const <Folder>[];
+                            return folders
+                                .any((f) => f.id == details.data);
+                          },
                           onAcceptWithDetails: (details) {
                             ref
                                 .read(folderNotifierProvider.notifier)
