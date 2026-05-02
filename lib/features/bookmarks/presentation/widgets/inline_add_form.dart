@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_spacing.dart';
 import '../../../folders/application/folder_providers.dart';
+import '../../../folders/domain/folder.dart';
 import '../../application/bookmark_notifier.dart';
 import 'bookmark_folder_field.dart';
 
@@ -82,6 +83,25 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
 
   @override
   Widget build(BuildContext context) {
+    // Self-heal: when a folder referenced by [_pendingFolderId] is removed
+    // (cascade-delete in Story 2.4 or a future sync-merge removal), reset
+    // the pending id so Save doesn't dispatch a dead folderId. The
+    // BookmarkFolderField already shows "No folder" defensively when the
+    // id is missing (Story 2.3); resetting here makes the SAVED bookmark
+    // match what the field displays. ref.listen is build-safe in
+    // flutter_riverpod -- no manual disposal needed (vs ref.listenManual).
+    ref.listen<AsyncValue<List<Folder>>>(
+      watchFoldersProvider,
+      (_, next) {
+        final pending = _pendingFolderId;
+        if (pending == null) return;
+        final folders = next.value ?? const <Folder>[];
+        if (folders.any((f) => f.id == pending)) return;
+        if (mounted) {
+          setState(() => _pendingFolderId = null);
+        }
+      },
+    );
     final textTheme = Theme.of(context).textTheme;
     return Semantics(
       label: 'Add bookmark form opened',

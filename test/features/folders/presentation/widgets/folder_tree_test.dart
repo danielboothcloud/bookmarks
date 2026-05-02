@@ -14,6 +14,7 @@ class _RecordingFolderNotifier extends FolderNotifier {
   String? lastAddParentId;
   final List<List<String>> renameCalls = <List<String>>[];
   final List<List<String?>> moveCalls = <List<String?>>[];
+  final List<String> deleteCascadeCalls = <String>[];
 
   @override
   Future<void> build() async {}
@@ -33,6 +34,11 @@ class _RecordingFolderNotifier extends FolderNotifier {
   @override
   Future<void> moveFolder(String folderId, String? newParentId) async {
     moveCalls.add([folderId, newParentId]);
+  }
+
+  @override
+  Future<void> deleteFolderCascade(String rootId) async {
+    deleteCascadeCalls.add(rootId);
   }
 }
 
@@ -598,5 +604,180 @@ void main() {
     final bRect = tester.getTopLeft(find.text('B'));
     // B is one depth deeper than A -> exactly 16px more leading padding.
     expect(bRect.dx - aRect.dx, closeTo(16.0, 0.01));
+  });
+
+  // ------------------------------------------------------------------
+  // _FolderDeleteConfirmation tests (Story 2.4)
+  // ------------------------------------------------------------------
+
+  group('_FolderDeleteConfirmation', () {
+    testWidgets(
+        'with pendingFolderDeleteIdProvider == null, confirmation NOT rendered',
+        (tester) async {
+      final s = _setup();
+
+      await tester.pumpWidget(_wrap(s.container));
+      s.stream.add([_f('a', name: 'Personal')]);
+      await tester.pump();
+
+      expect(find.text("Delete 'Personal' and all its contents?"),
+          findsNothing);
+    });
+
+    testWidgets(
+        'with pendingFolderDeleteIdProvider == folder.id, confirmation '
+        'is rendered with the folder name and Delete/Cancel buttons',
+        (tester) async {
+      final s = _setup();
+      s.container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+
+      await tester.pumpWidget(_wrap(s.container));
+      s.stream.add([_f('a', name: 'Personal')]);
+      await tester.pump();
+
+      expect(find.text("Delete 'Personal' and all its contents?"),
+          findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Delete'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
+    });
+
+    testWidgets('Tapping Cancel clears pendingFolderDeleteIdProvider',
+        (tester) async {
+      final s = _setup();
+      s.container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+
+      await tester.pumpWidget(_wrap(s.container));
+      s.stream.add([_f('a', name: 'Personal')]);
+      await tester.pump();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pump();
+
+      expect(s.container.read(pendingFolderDeleteIdProvider), isNull);
+      expect(_readNotifier(s.container).deleteCascadeCalls, isEmpty);
+    });
+
+    testWidgets(
+        'Tapping Delete invokes folderNotifier.deleteFolderCascade(folder.id) '
+        'exactly once', (tester) async {
+      final s = _setup();
+      s.container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+
+      await tester.pumpWidget(_wrap(s.container));
+      s.stream.add([_f('a', name: 'Personal')]);
+      await tester.pump();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pump();
+
+      expect(_readNotifier(s.container).deleteCascadeCalls, ['a']);
+    });
+
+    testWidgets(
+        'Enter inside the confirmation invokes deleteFolderCascade '
+        '(autofocused FocusNode + Shortcuts(Enter) -- mirrors bookmark '
+        'detail-pane Story 1.5 pattern)', (tester) async {
+      final s = _setup();
+      s.container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+
+      await tester.pumpWidget(_wrap(s.container));
+      s.stream.add([_f('a', name: 'Personal')]);
+      // Pump twice: first build mounts the FocusNode; postFrameCallback
+      // queues requestFocus; second pump processes the focus request.
+      await tester.pump();
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+
+      expect(_readNotifier(s.container).deleteCascadeCalls, ['a'],
+          reason: 'Enter inside the confirmation must confirm deletion');
+    });
+
+    testWidgets(
+        'DismissIntent inside the confirmation clears '
+        'pendingFolderDeleteIdProvider (local Shortcuts/Actions binding)',
+        (tester) async {
+      final s = _setup();
+      s.container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+
+      await tester.pumpWidget(_wrap(s.container));
+      s.stream.add([_f('a', name: 'Personal')]);
+      await tester.pump();
+
+      // Invoke DismissIntent on a context INSIDE the confirmation so
+      // resolution finds the local Action wiring (without depending on
+      // primaryFocus being inside the local Shortcuts subtree -- the test
+      // harness has no AppShell installed, so a key event with no in-scope
+      // focus would propagate without effect).
+      final ctx = tester.element(find.widgetWithText(TextButton, 'Cancel'));
+      Actions.invoke(ctx, const DismissIntent());
+      await tester.pump();
+
+      expect(s.container.read(pendingFolderDeleteIdProvider), isNull);
+    });
+
+    testWidgets(
+        'Switching pendingFolderDeleteIdProvider from A to B collapses A and '
+        'renders B (single-confirmation invariant)', (tester) async {
+      final s = _setup();
+      s.container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+
+      await tester.pumpWidget(_wrap(s.container));
+      s.stream.add([
+        _f('a', name: 'A', createdAt: 1000),
+        _f('b', name: 'B', createdAt: 2000),
+      ]);
+      await tester.pump();
+
+      expect(find.text("Delete 'A' and all its contents?"), findsOneWidget);
+      expect(find.text("Delete 'B' and all its contents?"), findsNothing);
+
+      s.container.read(pendingFolderDeleteIdProvider.notifier).prompt('b');
+      await tester.pump();
+
+      expect(find.text("Delete 'A' and all its contents?"), findsNothing);
+      expect(find.text("Delete 'B' and all its contents?"), findsOneWidget);
+    });
+
+    testWidgets(
+        'Confirmation indents to match the parent row (depth 0): content '
+        'left edge equals the folder name left edge', (tester) async {
+      final s = _setup();
+      s.container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+
+      await tester.pumpWidget(_wrap(s.container));
+      s.stream.add([_f('a', name: 'Personal')]);
+      await tester.pump();
+
+      final nameLeft = tester.getTopLeft(find.text('Personal')).dx;
+      final promptLeft = tester
+          .getTopLeft(find.text("Delete 'Personal' and all its contents?"))
+          .dx;
+      expect(promptLeft, closeTo(nameLeft, 0.01));
+    });
+
+    testWidgets(
+        'Confirmation at deeper depth indents an additional 16px per level',
+        (tester) async {
+      final s = _setup();
+      s.container.read(expandedFolderIdsProvider.notifier).expand('a');
+      s.container.read(pendingFolderDeleteIdProvider.notifier).prompt('b');
+
+      await tester.pumpWidget(_wrap(s.container));
+      s.stream.add([
+        _f('a', name: 'A', createdAt: 1000),
+        _f('b', name: 'B', parentId: 'a', createdAt: 2000),
+      ]);
+      await tester.pump();
+
+      final bNameLeft = tester.getTopLeft(find.text('B')).dx;
+      final promptLeft = tester
+          .getTopLeft(find.text("Delete 'B' and all its contents?"))
+          .dx;
+      expect(promptLeft, closeTo(bNameLeft, 0.01),
+          reason:
+              'depth-1 confirmation must align with depth-1 folder name (+16px)');
+    });
   });
 }

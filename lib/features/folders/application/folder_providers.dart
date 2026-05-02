@@ -2,6 +2,7 @@
 // (Same analyzer-version conflict that pins the bookmarks providers --
 // see bookmark_providers.dart header.)
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../main.dart';
@@ -33,6 +34,25 @@ class PendingFolderEditIdNotifier extends Notifier<String?> {
 final pendingFolderEditIdProvider =
     NotifierProvider<PendingFolderEditIdNotifier, String?>(
         PendingFolderEditIdNotifier.new);
+
+/// The id of the folder currently showing its inline delete confirmation.
+/// Only ONE folder confirmation is open at a time -- pressing Delete on
+/// a different folder migrates this state to the new id, collapsing the
+/// prior confirmation. `null` means no confirmation is open. Mirrors the
+/// single-id Notifier shape of [pendingFolderEditIdProvider] and the
+/// bookmarks `pendingDeleteIdProvider`; conflating them would force every
+/// consumer to disambiguate by intent.
+class PendingFolderDeleteIdNotifier extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void prompt(String id) => state = id;
+  void clear() => state = null;
+}
+
+final pendingFolderDeleteIdProvider =
+    NotifierProvider<PendingFolderDeleteIdNotifier, String?>(
+        PendingFolderDeleteIdNotifier.new);
 
 /// The id of the folder whose contents are currently displayed in the
 /// FoldersScreen content area. `null` when no folder is selected (the content
@@ -75,6 +95,17 @@ class ExpandedFolderIdsNotifier extends Notifier<Set<String>> {
   void collapse(String id) {
     if (!state.contains(id)) return;
     state = state.where((x) => x != id).toSet();
+  }
+
+  /// Bulk replacement -- used by [FolderNotifier.deleteFolderCascade] to
+  /// drop multiple deleted ids in a single notification. Prefer this over
+  /// looping `.collapse(id)` which would emit N notifications. The
+  /// `setEquals` short-circuit avoids re-broadcasting on identity-equal
+  /// replacements (consumers reading the set via `ref.watch` would
+  /// otherwise see a spurious rebuild).
+  void replace(Set<String> next) {
+    if (setEquals(state, next)) return;
+    state = next;
   }
 }
 
@@ -120,6 +151,36 @@ Set<String> collectFolderDescendants(
   }
   return result;
 }
+
+/// Flat ordered list of folders currently VISIBLE in the sidebar tree.
+/// Roots in [folderChildrenIndexProvider] order (the repo's `createdAt asc`),
+/// each followed by its descendants ONLY when the parent is in
+/// [expandedFolderIdsProvider]. This is the navigation order used by
+/// keyboard arrow keys (Up/Down move selection along this list).
+///
+/// Recursive walk over the byParent index -- depth is bounded in practice
+/// (typical folder trees are < 10 deep). The traversal does NOT use a
+/// visited set: a corrupted cyclic byParent map would already have been
+/// caught by [collectFolderDescendants] / [flattenFolderTree] which DO
+/// use one; here we trust the index is well-formed because both producers
+/// never emit cycles. If a cycle ever sneaks through (e.g. a future sync
+/// merge bug), the resulting infinite recursion would surface immediately
+/// in dev rather than silently hiding behind a visited-set sentinel.
+final visibleFolderListProvider = Provider<List<Folder>>((ref) {
+  final byParent = ref.watch(folderChildrenIndexProvider);
+  final expanded = ref.watch(expandedFolderIdsProvider);
+  final result = <Folder>[];
+  void walk(List<Folder> folders) {
+    for (final f in folders) {
+      result.add(f);
+      if (expanded.contains(f.id)) {
+        walk(byParent[f.id] ?? const <Folder>[]);
+      }
+    }
+  }
+  walk(byParent[null] ?? const <Folder>[]);
+  return result;
+});
 
 /// Pre-order traversal of the folder tree producing a depth-tagged flat list.
 /// Used by `FolderPicker` (Story 2.3) to render the full tree as a linear

@@ -152,6 +152,69 @@ class FolderNotifier extends AsyncNotifier<void> {
     }
   }
 
+  /// Deletes [rootId] AND every nested subfolder AND every bookmark whose
+  /// folderId is in the descendant set. Atomic via the repo's transaction.
+  /// Cleans up four pieces of UI state on success so a deleted folder/
+  /// bookmark cannot be referenced by a stale provider:
+  ///   1. [pendingFolderDeleteIdProvider] -- the prompt that triggered us.
+  ///   2. [pendingFolderEditIdProvider] -- in the rare race where the user
+  ///      had an inline rename open on a soon-to-be-deleted folder.
+  ///   3. [selectedFolderIdProvider] -- if the deleted subtree contained
+  ///      it; FoldersScreen renders its calm "select a folder" placeholder
+  ///      rather than leaning on the Story 2.3 defensive fallback.
+  ///   4. [expandedFolderIdsProvider] -- prune deleted ids so the set
+  ///      doesn't accumulate stale members across multiple deletes.
+  ///
+  /// Does NOT clean [selectedBookmarkIdProvider]: the live
+  /// `selectedBookmarkProvider` already returns null for a missing id
+  /// (Story 1.5's pattern). Reaching into bookmark providers from a folder
+  /// notifier would couple two features unnecessarily.
+  Future<void> deleteFolderCascade(String rootId) async {
+    // Snapshot byParent BEFORE any state mutation so the descendant set
+    // reflects the tree at the moment of the user's confirmation -- a
+    // sync-merge or another action between confirmation and this method's
+    // await cannot retroactively change what we delete.
+    final byParent = ref.read(folderChildrenIndexProvider);
+    final descendants = collectFolderDescendants(rootId, byParent);
+
+    state = const AsyncValue<void>.loading();
+    final result =
+        await ref.read(folderRepositoryProvider).deleteCascade(descendants);
+
+    switch (result) {
+      case Ok():
+        state = const AsyncValue<void>.data(null);
+        // Clear prompt FIRST so the confirmation row collapses on the same
+        // emission frame as the tree update -- avoids a flicker where the
+        // confirmation briefly outlives its folder.
+        ref.read(pendingFolderDeleteIdProvider.notifier).clear();
+
+        final pendingEdit = ref.read(pendingFolderEditIdProvider);
+        if (pendingEdit != null && descendants.contains(pendingEdit)) {
+          ref.read(pendingFolderEditIdProvider.notifier).clear();
+        }
+
+        final selected = ref.read(selectedFolderIdProvider);
+        if (selected != null && descendants.contains(selected)) {
+          ref.read(selectedFolderIdProvider.notifier).clear();
+        }
+
+        final expanded = ref.read(expandedFolderIdsProvider);
+        final survivingExpanded = expanded.difference(descendants);
+        if (survivingExpanded.length != expanded.length) {
+          ref
+              .read(expandedFolderIdsProvider.notifier)
+              .replace(survivingExpanded);
+        }
+
+      case Err(:final error):
+        // Confirmation row stays open (we did NOT clear the prompt) so the
+        // user can retry or cancel. AsyncValue.error is the surface; no
+        // banner is wired for folder errors at MVP.
+        state = AsyncValue<void>.error(error, StackTrace.current);
+    }
+  }
+
   /// Walks the ancestor chain starting at [candidateAncestorId]. Returns true
   /// iff [movingFolderId] appears anywhere in the chain -- meaning moving
   /// [movingFolderId] under [candidateAncestorId] would close a loop. O(depth)

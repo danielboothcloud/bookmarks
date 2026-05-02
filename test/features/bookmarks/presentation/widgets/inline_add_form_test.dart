@@ -323,4 +323,162 @@ void main() {
     expect(urlField.focusNode!.hasFocus, isTrue);
   });
 
+  // ------------------------------------------------------------------
+  // Self-heal tests (Story 2.4 -- closes Story 2.3 deferred M4)
+  // ------------------------------------------------------------------
+
+  Widget wrapStream({
+    required IBookmarkRepository repo,
+    required Stream<List<Folder>> foldersStream,
+    String? initialSelectedFolderId,
+  }) {
+    return ProviderScope(
+      overrides: [
+        bookmarkRepositoryProvider.overrideWithValue(repo),
+        metadataFetchServiceProvider
+            .overrideWithValue(_NoopMetadataFetchService()),
+        watchFoldersProvider.overrideWith((ref) => foldersStream),
+        selectedFolderIdProvider.overrideWith(
+          () => _PreseededFolderIdNotifier(initialSelectedFolderId),
+        ),
+      ],
+      child: MaterialApp(
+        theme: AppTheme.build(),
+        home: Scaffold(
+          body: _Eager(child: InlineAddForm(onClose: () {})),
+        ),
+      ),
+    );
+  }
+
+  testWidgets(
+      'self-heal: when the pre-filled folder is removed, _pendingFolderId '
+      'resets to null and Save dispatches folderId == null', (tester) async {
+    final repo = _FakeRepo();
+    final controller = StreamController<List<Folder>>.broadcast();
+    addTearDown(controller.close);
+
+    await tester.pumpWidget(wrapStream(
+      repo: repo,
+      foldersStream: controller.stream,
+      initialSelectedFolderId: 'a',
+    ));
+    controller.add([_folder('a', 'Personal')]);
+    await tester.pumpAndSettle();
+
+    // Sanity: pre-fill is "Personal".
+    expect(
+      find.descendant(
+        of: find.byType(BookmarkFolderField),
+        matching: find.text('Personal'),
+      ),
+      findsOneWidget,
+    );
+
+    // Folder vanishes (cascade-delete).
+    controller.add(<Folder>[]);
+    await tester.pumpAndSettle();
+
+    // Field renders defensive "No folder".
+    expect(
+      find.descendant(
+        of: find.byType(BookmarkFolderField),
+        matching: find.text('No folder'),
+      ),
+      findsOneWidget,
+    );
+
+    // Save -- the SAVED bookmark must use folderId == null, not the dead id.
+    await tester.enterText(
+        find.byType(TextField).first, 'https://example.com');
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+
+    expect(repo.savedBookmarks, hasLength(1));
+    expect(repo.savedBookmarks.single.folderId, isNull);
+  });
+
+  testWidgets(
+      'self-heal: emission containing a DIFFERENT folder set also resets',
+      (tester) async {
+    final repo = _FakeRepo();
+    final controller = StreamController<List<Folder>>.broadcast();
+    addTearDown(controller.close);
+
+    await tester.pumpWidget(wrapStream(
+      repo: repo,
+      foldersStream: controller.stream,
+      initialSelectedFolderId: 'a',
+    ));
+    controller.add([_folder('a', 'Personal')]);
+    await tester.pumpAndSettle();
+
+    // Different set: 'a' replaced with 'b'.
+    controller.add([_folder('b', 'Work')]);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byType(BookmarkFolderField),
+        matching: find.text('No folder'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+      'self-heal: emission with the same folder still present does NOT '
+      'reset _pendingFolderId', (tester) async {
+    final repo = _FakeRepo();
+    final controller = StreamController<List<Folder>>.broadcast();
+    addTearDown(controller.close);
+
+    await tester.pumpWidget(wrapStream(
+      repo: repo,
+      foldersStream: controller.stream,
+      initialSelectedFolderId: 'a',
+    ));
+    controller.add([_folder('a', 'Personal')]);
+    await tester.pumpAndSettle();
+
+    // Re-emit same membership (e.g. unrelated folder edit).
+    controller.add([_folder('a', 'Personal')]);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byType(BookmarkFolderField),
+        matching: find.text('Personal'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+      'self-heal: when _pendingFolderId is null, an emission with no '
+      'matching id does not reset / spuriously rebuild', (tester) async {
+    final repo = _FakeRepo();
+    final controller = StreamController<List<Folder>>.broadcast();
+    addTearDown(controller.close);
+
+    await tester.pumpWidget(wrapStream(
+      repo: repo,
+      foldersStream: controller.stream,
+      // initialSelectedFolderId: null (default) -> _pendingFolderId starts null.
+    ));
+    controller.add([_folder('a', 'Personal')]);
+    await tester.pumpAndSettle();
+
+    // Field shows "No folder" and remains so after another emission.
+    controller.add(<Folder>[]);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byType(BookmarkFolderField),
+        matching: find.text('No folder'),
+      ),
+      findsOneWidget,
+    );
+  });
 }

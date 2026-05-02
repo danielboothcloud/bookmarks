@@ -88,8 +88,10 @@ class _FolderSubtree extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final byParent = ref.watch(folderChildrenIndexProvider);
     final expanded = ref.watch(expandedFolderIdsProvider);
+    final pendingDeleteId = ref.watch(pendingFolderDeleteIdProvider);
     final children = byParent[folder.id] ?? const <Folder>[];
     final isExpanded = expanded.contains(folder.id);
+    final isConfirming = pendingDeleteId == folder.id;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -100,6 +102,12 @@ class _FolderSubtree extends ConsumerWidget {
           hasChildren: children.isNotEmpty,
           isExpanded: isExpanded,
         ),
+        if (isConfirming)
+          _FolderDeleteConfirmation(
+            key: ValueKey('confirm-${folder.id}'),
+            folder: folder,
+            depth: depth,
+          ),
         if (isExpanded)
           for (final child in children)
             _FolderSubtree(
@@ -108,6 +116,180 @@ class _FolderSubtree extends ConsumerWidget {
               depth: depth + 1,
             ),
       ],
+    );
+  }
+}
+
+class _ConfirmFolderDeleteIntent extends Intent {
+  const _ConfirmFolderDeleteIntent();
+}
+
+/// Inline expansion below a [FolderRow] that prompts cascade-delete
+/// confirmation. The confirmation is rendered as a sibling Column row
+/// (NOT a row replacement) because the 32px [_FolderRowFrame] has no room
+/// for "and all its contents?" + two buttons. Indentation matches the row
+/// above so the confirmation visually hangs from the prompted folder.
+///
+/// Stateful: holds a sibling [FocusNode] (NOT a button's focus node) so
+/// Enter routes through the local [Shortcuts] -> [_ConfirmFolderDeleteIntent]
+/// path -- same pattern as [BookmarkDetailPane]'s `_DeleteConfirmation`
+/// (Story 1.5). Pre-arming the Delete button with focus would mean any
+/// stray Enter triggers deletion; using a sibling Focus forces Enter
+/// through the explicit shortcut binding. Esc is bound locally so a
+/// focused button still gets close-scope dismissal.
+class _FolderDeleteConfirmation extends ConsumerStatefulWidget {
+  const _FolderDeleteConfirmation({
+    required this.folder,
+    required this.depth,
+    super.key,
+  });
+
+  final Folder folder;
+  final int depth;
+
+  @override
+  ConsumerState<_FolderDeleteConfirmation> createState() =>
+      _FolderDeleteConfirmationState();
+}
+
+class _FolderDeleteConfirmationState
+    extends ConsumerState<_FolderDeleteConfirmation> {
+  final _focusNode = FocusNode(debugLabel: 'folder-delete-confirmation');
+
+  @override
+  void initState() {
+    super.initState();
+    // initState fires in the same frame as the rebuild that swapped in this
+    // confirmation. Defer requestFocus to the next frame so the FocusNode
+    // is fully registered first -- mirrors Story 1.5's bookmark-confirm
+    // postframe pattern.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+        SingleActivator(LogicalKeyboardKey.enter):
+            _ConfirmFolderDeleteIntent(),
+        SingleActivator(LogicalKeyboardKey.numpadEnter):
+            _ConfirmFolderDeleteIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          DismissIntent: CallbackAction<DismissIntent>(
+            onInvoke: (_) {
+              ref.read(pendingFolderDeleteIdProvider.notifier).clear();
+              return null;
+            },
+          ),
+          _ConfirmFolderDeleteIntent:
+              CallbackAction<_ConfirmFolderDeleteIntent>(
+            onInvoke: (_) {
+              ref
+                  .read(folderNotifierProvider.notifier)
+                  .deleteFolderCascade(widget.folder.id);
+              return null;
+            },
+          ),
+        },
+        child: Focus(
+          focusNode: _focusNode,
+          child: Container(
+          // Subtle accent-tinted surface mirrors the row-selected
+          // background (`accent.withValues(alpha: 0.08)`) so the
+          // confirmation reads as a "selection-state expansion" rather
+          // than a foreign overlay.
+          color: AppColors.accent.withValues(alpha: 0.08),
+          padding: EdgeInsets.only(
+            // Mirrors _FolderRowFrame's padding math (left + depth * indent
+            // + 12px chevron slot + xs gap) so the confirmation's content
+            // edge aligns with the parent folder's name edge.
+            left: AppSpacing.md +
+                (widget.depth * _treeIndentPerDepth) +
+                12 +
+                AppSpacing.xs,
+            right: AppSpacing.md,
+            top: AppSpacing.xs,
+            bottom: AppSpacing.xs,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // "and all its contents?" matches AC1 verbatim. maxLines:2 +
+              // ellipsis prevents a 200-char folder name from pushing the
+              // buttons off-screen.
+              Text(
+                "Delete '${widget.folder.name}' and all its contents?",
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSidebar,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  // Tertiary TextButton (muted) per UX spec line 643 --
+                  // destructive confirmation cancel uses text-only.
+                  TextButton(
+                    onPressed: () => ref
+                        .read(pendingFolderDeleteIdProvider.notifier)
+                        .clear(),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.sm,
+                      ),
+                      minimumSize: const Size(0, 28),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      foregroundColor: AppColors.textSidebar,
+                    ),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.xs),
+                  // Destructive TextButton in accent colour per UX spec
+                  // line 648 -- "conspicuous but not alarming". Both
+                  // buttons run at 28px (shrinkWrap) -- justified
+                  // deviation from the 44px global minimum because the
+                  // sidebar inline surface is constrained.
+                  TextButton(
+                    onPressed: () => ref
+                        .read(folderNotifierProvider.notifier)
+                        .deleteFolderCascade(widget.folder.id),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.sm,
+                      ),
+                      minimumSize: const Size(0, 28),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      foregroundColor: AppColors.accent,
+                    ),
+                    child: const Text(
+                      'Delete',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          ),
+        ),
+      ),
     );
   }
 }

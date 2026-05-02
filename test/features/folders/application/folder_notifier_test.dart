@@ -10,9 +10,12 @@ import 'package:flutter_test/flutter_test.dart';
 class _RecordingFolderRepository implements IFolderRepository {
   final List<Folder> savedFolders = <Folder>[];
   final Map<String, Folder> store = <String, Folder>{};
+  final List<Set<String>> deleteCascadeCalls = <Set<String>>[];
 
   Result<Folder, AppError> Function(Folder)? saveResult;
   Result<Folder, AppError> Function(String)? getByIdResult;
+  Result<({int folders, int bookmarks}), AppError> Function(Set<String>)?
+      deleteCascadeResult;
 
   @override
   Stream<List<Folder>> watchAll() => const Stream<List<Folder>>.empty();
@@ -31,6 +34,18 @@ class _RecordingFolderRepository implements IFolderRepository {
     savedFolders.add(folder);
     store[folder.id] = folder;
     return (saveResult ?? Ok<Folder, AppError>.new)(folder);
+  }
+
+  @override
+  Future<Result<({int folders, int bookmarks}), AppError>> deleteCascade(
+    Set<String> folderIds,
+  ) async {
+    deleteCascadeCalls.add(folderIds);
+    final override = deleteCascadeResult;
+    if (override != null) return override(folderIds);
+    return Ok<({int folders, int bookmarks}), AppError>(
+      (folders: folderIds.length, bookmarks: 0),
+    );
   }
 }
 
@@ -458,6 +473,227 @@ void main() {
     expect(repo.savedFolders.length, 1,
         reason: 'broken chain is treated as no cycle; move should proceed');
     expect(repo.savedFolders.single.parentId, 'b');
+  });
+
+  // ------------------------------------------------------------------
+  // deleteFolderCascade tests (Story 2.4)
+  // ------------------------------------------------------------------
+
+  ProviderContainer cascadeContainer(
+    _RecordingFolderRepository repo, {
+    Map<String?, List<Folder>> byParent = const <String?, List<Folder>>{},
+  }) {
+    return ProviderContainer(overrides: [
+      folderRepositoryProvider.overrideWithValue(repo),
+      folderChildrenIndexProvider.overrideWithValue(byParent),
+    ]);
+  }
+
+  Folder f(String id, {String? parentId}) => Folder(
+        id: id,
+        name: id,
+        parentId: parentId,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1000),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+      );
+
+  test(
+      'deleteFolderCascade collects descendants (A>B>C) and calls repo with '
+      'the full set', () async {
+    final repo = _RecordingFolderRepository();
+    final byParent = <String?, List<Folder>>{
+      null: [f('a')],
+      'a': [f('b', parentId: 'a')],
+      'b': [f('c', parentId: 'b')],
+    };
+    final container = cascadeContainer(repo, byParent: byParent);
+    addTearDown(container.dispose);
+
+    await container
+        .read(folderNotifierProvider.notifier)
+        .deleteFolderCascade('a');
+
+    expect(repo.deleteCascadeCalls.length, 1);
+    expect(repo.deleteCascadeCalls.single, {'a', 'b', 'c'});
+  });
+
+  test('deleteFolderCascade with no descendants calls repo with {rootId}',
+      () async {
+    final repo = _RecordingFolderRepository();
+    final container = cascadeContainer(
+      repo,
+      byParent: <String?, List<Folder>>{null: [f('a')]},
+    );
+    addTearDown(container.dispose);
+
+    await container
+        .read(folderNotifierProvider.notifier)
+        .deleteFolderCascade('a');
+
+    expect(repo.deleteCascadeCalls.single, {'a'});
+  });
+
+  test('deleteFolderCascade Ok clears pendingFolderDeleteIdProvider',
+      () async {
+    final repo = _RecordingFolderRepository();
+    final container = cascadeContainer(
+      repo,
+      byParent: <String?, List<Folder>>{null: [f('a')]},
+    );
+    addTearDown(container.dispose);
+
+    container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+    expect(container.read(pendingFolderDeleteIdProvider), 'a');
+
+    await container
+        .read(folderNotifierProvider.notifier)
+        .deleteFolderCascade('a');
+
+    expect(container.read(pendingFolderDeleteIdProvider), isNull);
+  });
+
+  test(
+      'deleteFolderCascade Ok clears pendingFolderEditIdProvider when its id '
+      'is in the deleted set', () async {
+    final repo = _RecordingFolderRepository();
+    final container = cascadeContainer(
+      repo,
+      byParent: <String?, List<Folder>>{
+        null: [f('a')],
+        'a': [f('b', parentId: 'a')],
+      },
+    );
+    addTearDown(container.dispose);
+
+    container.read(pendingFolderEditIdProvider.notifier).start('b');
+
+    await container
+        .read(folderNotifierProvider.notifier)
+        .deleteFolderCascade('a');
+
+    expect(container.read(pendingFolderEditIdProvider), isNull);
+  });
+
+  test(
+      'deleteFolderCascade Ok does NOT clear pendingFolderEditIdProvider when '
+      'its id is OUTSIDE the deleted set', () async {
+    final repo = _RecordingFolderRepository();
+    final container = cascadeContainer(
+      repo,
+      byParent: <String?, List<Folder>>{null: [f('a'), f('survivor')]},
+    );
+    addTearDown(container.dispose);
+
+    container.read(pendingFolderEditIdProvider.notifier).start('survivor');
+
+    await container
+        .read(folderNotifierProvider.notifier)
+        .deleteFolderCascade('a');
+
+    expect(container.read(pendingFolderEditIdProvider), 'survivor');
+  });
+
+  test(
+      'deleteFolderCascade Ok clears selectedFolderIdProvider when its id is '
+      'in the deleted set', () async {
+    final repo = _RecordingFolderRepository();
+    final container = cascadeContainer(
+      repo,
+      byParent: <String?, List<Folder>>{
+        null: [f('a')],
+        'a': [f('b', parentId: 'a')],
+      },
+    );
+    addTearDown(container.dispose);
+
+    container.read(selectedFolderIdProvider.notifier).select('b');
+
+    await container
+        .read(folderNotifierProvider.notifier)
+        .deleteFolderCascade('a');
+
+    expect(container.read(selectedFolderIdProvider), isNull);
+  });
+
+  test(
+      'deleteFolderCascade Ok does NOT clear selectedFolderIdProvider when '
+      'its id is OUTSIDE the deleted set', () async {
+    final repo = _RecordingFolderRepository();
+    final container = cascadeContainer(
+      repo,
+      byParent: <String?, List<Folder>>{null: [f('a'), f('survivor')]},
+    );
+    addTearDown(container.dispose);
+
+    container.read(selectedFolderIdProvider.notifier).select('survivor');
+
+    await container
+        .read(folderNotifierProvider.notifier)
+        .deleteFolderCascade('a');
+
+    expect(container.read(selectedFolderIdProvider), 'survivor');
+  });
+
+  test(
+      'deleteFolderCascade Ok prunes deleted ids from expandedFolderIdsProvider '
+      'with a single notification', () async {
+    final repo = _RecordingFolderRepository();
+    final container = cascadeContainer(
+      repo,
+      byParent: <String?, List<Folder>>{
+        null: [f('a'), f('survivor')],
+        'a': [f('b', parentId: 'a')],
+      },
+    );
+    addTearDown(container.dispose);
+
+    container.read(expandedFolderIdsProvider.notifier).expand('a');
+    container.read(expandedFolderIdsProvider.notifier).expand('b');
+    container.read(expandedFolderIdsProvider.notifier).expand('survivor');
+
+    var notifications = 0;
+    final sub = container.listen<Set<String>>(
+      expandedFolderIdsProvider,
+      (_, _) => notifications++,
+    );
+    addTearDown(sub.close);
+
+    await container
+        .read(folderNotifierProvider.notifier)
+        .deleteFolderCascade('a');
+
+    expect(container.read(expandedFolderIdsProvider), {'survivor'});
+    expect(notifications, 1,
+        reason: 'bulk replace must emit exactly one notification');
+  });
+
+  test(
+      'deleteFolderCascade Err leaves pendingFolderDeleteIdProvider AND '
+      'selectedFolderIdProvider intact (failure path keeps UI state)',
+      () async {
+    final repo = _RecordingFolderRepository()
+      ..deleteCascadeResult = (_) =>
+          const Err<({int folders, int bookmarks}), AppError>(
+            StorageError('boom'),
+          );
+    final container = cascadeContainer(
+      repo,
+      byParent: <String?, List<Folder>>{null: [f('a')]},
+    );
+    addTearDown(container.dispose);
+
+    container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+    container.read(selectedFolderIdProvider.notifier).select('a');
+
+    await container
+        .read(folderNotifierProvider.notifier)
+        .deleteFolderCascade('a');
+
+    expect(container.read(pendingFolderDeleteIdProvider), 'a');
+    expect(container.read(selectedFolderIdProvider), 'a');
+    final state = container.read(folderNotifierProvider);
+    expect(state.hasError, isTrue);
+    expect(state.error, isA<StorageError>());
   });
 
   test('moveFolder save Err sets hasError', () async {

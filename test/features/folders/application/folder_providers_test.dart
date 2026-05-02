@@ -255,4 +255,180 @@ void main() {
       expect(container.read(selectedFolderIdProvider), isNull);
     });
   });
+
+  group('pendingFolderDeleteIdProvider', () {
+    test('initial state is null', () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      expect(container.read(pendingFolderDeleteIdProvider), isNull);
+    });
+
+    test('prompt sets state; clear resets to null', () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+      expect(container.read(pendingFolderDeleteIdProvider), 'a');
+
+      container.read(pendingFolderDeleteIdProvider.notifier).clear();
+      expect(container.read(pendingFolderDeleteIdProvider), isNull);
+    });
+
+    test('prompt(b) after prompt(a) migrates state to b (single confirmation)',
+        () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+      container.read(pendingFolderDeleteIdProvider.notifier).prompt('b');
+      expect(container.read(pendingFolderDeleteIdProvider), 'b');
+    });
+  });
+
+  group('ExpandedFolderIdsNotifier.replace', () {
+    test('replaces the set with a different membership', () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      final n = container.read(expandedFolderIdsProvider.notifier);
+      n.expand('a');
+      n.expand('b');
+
+      n.replace({'a', 'c'});
+      expect(container.read(expandedFolderIdsProvider), {'a', 'c'});
+    });
+
+    test('setEquals-equal replacement emits no notification', () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      final n = container.read(expandedFolderIdsProvider.notifier);
+      n.expand('a');
+      n.expand('b');
+
+      var notifications = 0;
+      final sub = container.listen<Set<String>>(
+        expandedFolderIdsProvider,
+        (_, _) => notifications++,
+      );
+      addTearDown(sub.close);
+
+      n.replace({'a', 'b'}); // identity-equal in setEquals terms
+      expect(notifications, 0);
+    });
+  });
+
+  group('visibleFolderListProvider', () {
+    // The walker reads byParent + the expansion set and emits a flat
+    // depth-ordered list. Tests below override folderChildrenIndexProvider
+    // directly so we exercise the walk in isolation from watchFoldersProvider.
+    ProviderContainer makeContainer({
+      required Map<String?, List<Folder>> byParent,
+      Set<String> expanded = const <String>{},
+    }) {
+      final container = ProviderContainer(overrides: [
+        folderChildrenIndexProvider.overrideWithValue(byParent),
+      ]);
+      addTearDown(container.dispose);
+      // Pre-populate expansion set after construction so the override above
+      // is the only injection point we need.
+      final n = container.read(expandedFolderIdsProvider.notifier);
+      for (final id in expanded) {
+        n.expand(id);
+      }
+      return container;
+    }
+
+    test('empty byParent yields an empty list', () {
+      final c = makeContainer(byParent: const <String?, List<Folder>>{});
+      expect(c.read(visibleFolderListProvider), isEmpty);
+    });
+
+    test('roots only, none expanded -> roots in createdAt asc order', () {
+      final c = makeContainer(byParent: <String?, List<Folder>>{
+        null: [_f('a', t: 1000), _f('b', t: 2000), _f('c', t: 3000)],
+      });
+      expect(
+        c.read(visibleFolderListProvider).map((f) => f.id).toList(),
+        ['a', 'b', 'c'],
+      );
+    });
+
+    test('collapsed parent hides its children even when they exist', () {
+      final c = makeContainer(byParent: <String?, List<Folder>>{
+        null: [_f('a')],
+        'a': [_f('b', parentId: 'a')],
+      });
+      // 'a' is NOT in the expanded set.
+      expect(
+        c.read(visibleFolderListProvider).map((f) => f.id).toList(),
+        ['a'],
+      );
+    });
+
+    test('expanded parent reveals direct children in pre-order', () {
+      final c = makeContainer(
+        byParent: <String?, List<Folder>>{
+          null: [_f('a')],
+          'a': [_f('b', parentId: 'a', t: 1000), _f('c', parentId: 'a', t: 2000)],
+        },
+        expanded: {'a'},
+      );
+      expect(
+        c.read(visibleFolderListProvider).map((f) => f.id).toList(),
+        ['a', 'b', 'c'],
+      );
+    });
+
+    test('deep nesting with all expanded -> full pre-order DFS', () {
+      // Tree:
+      //   a
+      //     b
+      //       c
+      //   d
+      final c = makeContainer(
+        byParent: <String?, List<Folder>>{
+          null: [_f('a', t: 1000), _f('d', t: 4000)],
+          'a': [_f('b', parentId: 'a', t: 2000)],
+          'b': [_f('c', parentId: 'b', t: 3000)],
+        },
+        expanded: {'a', 'b'},
+      );
+      expect(
+        c.read(visibleFolderListProvider).map((f) => f.id).toList(),
+        ['a', 'b', 'c', 'd'],
+      );
+    });
+
+    test('mixed expansion: only expanded parents reveal children', () {
+      // Tree:
+      //   a (expanded)
+      //     b
+      //   c (collapsed)
+      //     d
+      final c = makeContainer(
+        byParent: <String?, List<Folder>>{
+          null: [_f('a', t: 1000), _f('c', t: 3000)],
+          'a': [_f('b', parentId: 'a', t: 2000)],
+          'c': [_f('d', parentId: 'c', t: 4000)],
+        },
+        expanded: {'a'},
+      );
+      expect(
+        c.read(visibleFolderListProvider).map((f) => f.id).toList(),
+        ['a', 'b', 'c'],
+      );
+    });
+
+    test('expanding an unknown id (no entry in byParent) is a silent no-op', () {
+      final c = makeContainer(
+        byParent: <String?, List<Folder>>{null: [_f('a')]},
+        expanded: {'ghost'}, // not present in any byParent value
+      );
+      expect(
+        c.read(visibleFolderListProvider).map((f) => f.id).toList(),
+        ['a'],
+      );
+    });
+  });
 }

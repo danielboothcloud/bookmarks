@@ -47,6 +47,40 @@ class FolderRepository implements IFolderRepository {
     }
   }
 
+  @override
+  Future<Result<({int folders, int bookmarks}), AppError>> deleteCascade(
+    Set<String> folderIds,
+  ) async {
+    if (folderIds.isEmpty) {
+      return const Ok<({int folders, int bookmarks}), AppError>(
+        (folders: 0, bookmarks: 0),
+      );
+    }
+    try {
+      final result = await _db.transaction(() async {
+        // Bookmarks first, folders second. SQLite without a FK constraint
+        // (folder_id is plain TEXT NULLABLE -- see Architecture line 222-226)
+        // doesn't enforce ordering today; we still order this way so a
+        // hypothetical future FK migration with ON DELETE CASCADE doesn't
+        // require reordering.
+        final bookmarksDeleted =
+            await (_db.delete(_db.bookmarks)
+                  ..where((t) => t.folderId.isIn(folderIds)))
+                .go();
+        final foldersDeleted =
+            await (_db.delete(_db.folders)
+                  ..where((t) => t.id.isIn(folderIds)))
+                .go();
+        return (folders: foldersDeleted, bookmarks: bookmarksDeleted);
+      });
+      return Ok<({int folders, int bookmarks}), AppError>(result);
+    } catch (e) {
+      return Err<({int folders, int bookmarks}), AppError>(
+        StorageError(e.toString()),
+      );
+    }
+  }
+
   FoldersCompanion _toCompanion(Folder f) => FoldersCompanion(
         id: Value(f.id),
         name: Value(f.name),

@@ -9,6 +9,8 @@ import 'package:bookmarks/features/bookmarks/presentation/widgets/bookmark_detai
 import 'package:bookmarks/features/bookmarks/application/bookmark_providers.dart';
 import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
 import 'package:bookmarks/features/bookmarks/domain/i_bookmark_repository.dart';
+import 'package:bookmarks/features/folders/application/folder_providers.dart';
+import 'package:bookmarks/features/folders/domain/folder.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -31,10 +33,12 @@ class _FakeBookmarkRepository implements IBookmarkRepository {
       const Ok<void, AppError>(null);
 }
 
-Widget _buildApp() {
+Widget _buildApp({Map<String?, List<Folder>>? folderTree}) {
   return ProviderScope(
     overrides: [
       bookmarkRepositoryProvider.overrideWithValue(_FakeBookmarkRepository()),
+      if (folderTree != null)
+        folderChildrenIndexProvider.overrideWithValue(folderTree),
     ],
     child: MaterialApp.router(
       theme: AppTheme.build(),
@@ -42,6 +46,14 @@ Widget _buildApp() {
     ),
   );
 }
+
+Folder _ff(String id, {String? parentId}) => Folder(
+      id: id,
+      name: id,
+      parentId: parentId,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(1000),
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+    );
 
 void main() {
   group('AppShell responsive layout', () {
@@ -138,11 +150,11 @@ void main() {
       // expected by AppShell's Shortcuts/Actions configuration.
       expect(const AddBookmarkIntent(), isA<Intent>());
       expect(const FocusSearchIntent(), isA<Intent>());
-      expect(const DeleteSelectedBookmarkIntent(), isA<Intent>());
+      expect(const DeleteSelectedItemIntent(), isA<Intent>());
     });
 
     testWidgets(
-        'DeleteSelectedBookmarkIntent prompts pendingDelete on the selected id '
+        'DeleteSelectedItemIntent prompts pendingDelete on the selected id '
         '(Story 1.5)', (tester) async {
       await tester.binding.setSurfaceSize(const Size(1200, 800));
       await tester.pumpWidget(_buildApp());
@@ -152,14 +164,14 @@ void main() {
       final container = ProviderScope.containerOf(ctx);
       container.read(selectedBookmarkIdProvider.notifier).select('chosen-id');
 
-      Actions.invoke(ctx, const DeleteSelectedBookmarkIntent());
+      Actions.invoke(ctx, const DeleteSelectedItemIntent());
       await tester.pumpAndSettle();
 
       expect(container.read(pendingDeleteIdProvider), 'chosen-id');
     });
 
     testWidgets(
-        'DeleteSelectedBookmarkIntent is a no-op when nothing is selected',
+        'DeleteSelectedItemIntent is a no-op when nothing is selected',
         (tester) async {
       await tester.binding.setSurfaceSize(const Size(1200, 800));
       await tester.pumpWidget(_buildApp());
@@ -169,14 +181,14 @@ void main() {
       final container = ProviderScope.containerOf(ctx);
       expect(container.read(selectedBookmarkIdProvider), isNull);
 
-      Actions.invoke(ctx, const DeleteSelectedBookmarkIntent());
+      Actions.invoke(ctx, const DeleteSelectedItemIntent());
       await tester.pumpAndSettle();
 
       expect(container.read(pendingDeleteIdProvider), isNull);
     });
 
     testWidgets(
-        'Delete keystroke fires DeleteSelectedBookmarkIntent (verifies the '
+        'Delete keystroke fires DeleteSelectedItemIntent (verifies the '
         'SingleActivator binding, not just the Action wiring)',
         (tester) async {
       await tester.binding.setSurfaceSize(const Size(1200, 800));
@@ -198,7 +210,7 @@ void main() {
     });
 
     testWidgets(
-        'Backspace keystroke fires DeleteSelectedBookmarkIntent '
+        'Backspace keystroke fires DeleteSelectedItemIntent '
         '(macOS users press Backspace; AC1 enumerates both keys)',
         (tester) async {
       await tester.binding.setSurfaceSize(const Size(1200, 800));
@@ -309,6 +321,343 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(container.read(selectedBookmarkIdProvider), isNull);
+    });
+  });
+
+  group('AppShell fallback focus (regression: Story 2.4 macOS beep)', () {
+    testWidgets(
+        'AppShell autofocuses a Focus node inside its Shortcuts subtree so '
+        'Delete works when no row, button, or text field has explicitly '
+        'claimed focus (InkWell does not focus on tap; without a fallback '
+        'Focus, key events propagate to the platform)', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      // Sanity: primaryFocus is set on mount (the load-bearing precondition
+      // for the keyboard pipeline below). Without the autofocus Focus node
+      // inside Shortcuts, primaryFocus is null in this test harness.
+      expect(FocusManager.instance.primaryFocus, isNotNull,
+          reason: 'AppShell must claim in-tree focus on mount');
+
+      // Set a folder selection (simulating a sidebar click, but without the
+      // route navigation that would tangle this test). Press Delete via the
+      // real keyboard pipeline -- this exercises Shortcuts.activator
+      // resolution, not Actions.invoke.
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('f-1');
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingFolderDeleteIdProvider), 'f-1',
+          reason: 'Delete must reach AppShell Shortcuts via fallback focus');
+    });
+  });
+
+  group('AppShell folder-aware delete intents (Story 2.4)', () {
+    testWidgets(
+        'DeleteSelectedItemIntent prompts the FOLDER when only a folder '
+        'is selected', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('f-1');
+
+      Actions.invoke(ctx, const DeleteSelectedItemIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingFolderDeleteIdProvider), 'f-1');
+      expect(container.read(pendingDeleteIdProvider), isNull);
+    });
+
+    testWidgets(
+        'DeleteSelectedItemIntent: bookmark wins over folder when BOTH are '
+        'selected (Story 1.5 priority preserved)', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedBookmarkIdProvider.notifier).select('b-1');
+      container.read(selectedFolderIdProvider.notifier).select('f-1');
+
+      Actions.invoke(ctx, const DeleteSelectedItemIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingDeleteIdProvider), 'b-1');
+      expect(container.read(pendingFolderDeleteIdProvider), isNull);
+    });
+
+    testWidgets(
+        'AppDismissIntent: pendingFolderDelete has higher Esc priority than '
+        'pendingDelete', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(pendingDeleteIdProvider.notifier).prompt('b-1');
+      container.read(pendingFolderDeleteIdProvider.notifier).prompt('f-1');
+
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingFolderDeleteIdProvider), isNull);
+      expect(container.read(pendingDeleteIdProvider), 'b-1',
+          reason: 'cascade stops at folder confirmation -- bookmark prompt '
+              'remains, requires another Esc');
+    });
+
+    testWidgets(
+        'AppDismissIntent: clears pendingDelete when no folder confirmation',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(pendingDeleteIdProvider.notifier).prompt('b-1');
+
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingDeleteIdProvider), isNull);
+    });
+  });
+
+  group('Sidebar keyboard navigation (Story 2.4 follow-up)', () {
+    // Tree:
+    //   a
+    //     b
+    //   c
+    Map<String?, List<Folder>> tree() => {
+          null: [_ff('a'), _ff('c')],
+          'a': [_ff('b', parentId: 'a')],
+        };
+
+    testWidgets('ArrowDown moves selection to the next visible folder',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('a');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+
+      // 'a' is collapsed -> visible list is [a, c]; next is c.
+      expect(container.read(selectedFolderIdProvider), 'c');
+    });
+
+    testWidgets(
+        'ArrowDown skips collapsed children and lands on next root sibling',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('a');
+      // Now expand 'a' so 'b' is visible.
+      container.read(expandedFolderIdsProvider.notifier).expand('a');
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      expect(container.read(selectedFolderIdProvider), 'b');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      expect(container.read(selectedFolderIdProvider), 'c');
+    });
+
+    testWidgets('ArrowDown at last visible folder is a no-op',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('c');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+
+      expect(container.read(selectedFolderIdProvider), 'c');
+    });
+
+    testWidgets('ArrowUp moves selection to the previous visible folder',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('c');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pumpAndSettle();
+
+      expect(container.read(selectedFolderIdProvider), 'a');
+    });
+
+    testWidgets('ArrowRight on a collapsed parent expands it',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('a');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+
+      expect(container.read(expandedFolderIdsProvider), contains('a'));
+      expect(container.read(selectedFolderIdProvider), 'a',
+          reason: 'expand only -- selection stays put on the parent');
+    });
+
+    testWidgets(
+        'ArrowRight on an already-expanded parent moves to first child',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('a');
+      container.read(expandedFolderIdsProvider.notifier).expand('a');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+
+      expect(container.read(selectedFolderIdProvider), 'b');
+    });
+
+    testWidgets('ArrowRight on a leaf is a no-op', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('c');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+
+      expect(container.read(expandedFolderIdsProvider), isEmpty);
+      expect(container.read(selectedFolderIdProvider), 'c');
+    });
+
+    testWidgets('ArrowLeft on an expanded folder collapses it',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('a');
+      container.read(expandedFolderIdsProvider.notifier).expand('a');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pumpAndSettle();
+
+      expect(container.read(expandedFolderIdsProvider), isEmpty);
+    });
+
+    testWidgets('ArrowLeft on a child folder ascends to its parent',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(expandedFolderIdsProvider.notifier).expand('a');
+      container.read(selectedFolderIdProvider.notifier).select('b');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pumpAndSettle();
+
+      expect(container.read(selectedFolderIdProvider), 'a');
+    });
+
+    testWidgets('Enter on a parent toggles expansion', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('a');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(container.read(expandedFolderIdsProvider), {'a'});
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(container.read(expandedFolderIdsProvider), isEmpty);
+    });
+
+    testWidgets('Enter on a leaf is a no-op (no expansion mutation)',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('c');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      expect(container.read(expandedFolderIdsProvider), isEmpty);
+    });
+
+    testWidgets(
+        'Arrow keys with no folder selected are inert (key propagates)',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      expect(container.read(selectedFolderIdProvider), isNull);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+
+      expect(container.read(selectedFolderIdProvider), isNull);
+    });
+
+    testWidgets(
+        'Arrow keys with focus inside an EditableText do NOT navigate '
+        '(carve-out preserves text-cursor behaviour)', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(folderTree: tree()));
+      await tester.pumpAndSettle();
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedFolderIdProvider.notifier).select('a');
+      container.read(addFormVisibleProvider.notifier).show();
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+
+      expect(container.read(selectedFolderIdProvider), 'a',
+          reason: 'EditableText carve-out must suppress folder-nav arrows');
     });
   });
 
