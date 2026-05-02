@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/error/result.dart';
+import '../../tags/application/tag_notifier.dart';
+import '../../tags/application/tag_providers.dart';
 import '../domain/bookmark.dart';
 import 'bookmark_providers.dart';
 
@@ -20,6 +22,7 @@ class BookmarkNotifier extends AsyncNotifier<void> {
     required String url,
     String? title,
     String? folderId,
+    List<String> tagNames = const <String>[],
   }) async {
     final trimmedUrl = url.trim();
     final trimmedTitle = (title ?? '').trim();
@@ -37,6 +40,30 @@ class BookmarkNotifier extends AsyncNotifier<void> {
     final result = await ref.read(bookmarkRepositoryProvider).save(bookmark);
     switch (result) {
       case Ok():
+        // Tag wiring runs AFTER bookmark save succeeds. Deliberately a
+        // separate transaction (via TagRepository.upsertAndLinkAll) rather
+        // than nesting the bookmark insert into a tag transaction:
+        //   1. Cross-feature transaction nesting would mean BookmarkRepository
+        //      knows about tags. Layering violation.
+        //   2. Drift streams refresh both lists on each commit; the tiny extra
+        //      round-trip isn't user-visible.
+        //   3. If tag linking fails the bookmark survives -- correct: the
+        //      user's primary intent ("save this URL") is preserved; the
+        //      secondary intent ("with these tags") degrades.
+        if (tagNames.isNotEmpty) {
+          final tagResult =
+              await ref.read(tagRepositoryProvider).upsertAndLinkAll(
+                    bookmarkId: bookmark.id,
+                    tagNames: tagNames,
+                  );
+          if (tagResult case Err(:final error)) {
+            // Surface on the TAG notifier (not the bookmark notifier) so an
+            // MVP banner could distinguish them. The bookmark itself
+            // succeeded.
+            ref.read(tagNotifierProvider.notifier).state =
+                AsyncValue<void>.error(error, StackTrace.current);
+          }
+        }
         state = const AsyncValue<void>.data(null);
         // Fire-and-forget metadata fetch (NFR4): runs after save resolves so
         // the UI is already updated via the StreamProvider emission. Failures

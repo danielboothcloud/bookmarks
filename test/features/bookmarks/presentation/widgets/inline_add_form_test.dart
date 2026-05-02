@@ -12,6 +12,9 @@ import 'package:bookmarks/features/bookmarks/presentation/widgets/bookmark_folde
 import 'package:bookmarks/features/bookmarks/presentation/widgets/inline_add_form.dart';
 import 'package:bookmarks/features/folders/application/folder_providers.dart';
 import 'package:bookmarks/features/folders/domain/folder.dart';
+import 'package:bookmarks/features/tags/application/tag_providers.dart';
+import 'package:bookmarks/features/tags/domain/i_tag_repository.dart';
+import 'package:bookmarks/features/tags/domain/tag.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,6 +22,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _FakeRepo implements IBookmarkRepository {
   final List<Bookmark> savedBookmarks = [];
+  int saveAttempts = 0;
+  bool failNextSave = false;
 
   @override
   Stream<List<Bookmark>> watchAll() =>
@@ -30,6 +35,11 @@ class _FakeRepo implements IBookmarkRepository {
 
   @override
   Future<Result<Bookmark, AppError>> save(Bookmark bookmark) async {
+    saveAttempts++;
+    if (failNextSave) {
+      failNextSave = false;
+      return const Err<Bookmark, AppError>(StorageError('boom'));
+    }
     savedBookmarks.add(bookmark);
     return Ok<Bookmark, AppError>(bookmark);
   }
@@ -481,4 +491,335 @@ void main() {
       findsOneWidget,
     );
   });
+
+  group('Story 2.5: tags field', () {
+    Widget wrapWithTagRepo({
+      required IBookmarkRepository repo,
+      required ITagRepository tagRepo,
+      required VoidCallback onClose,
+    }) {
+      return ProviderScope(
+        overrides: [
+          bookmarkRepositoryProvider.overrideWithValue(repo),
+          metadataFetchServiceProvider
+              .overrideWithValue(_NoopMetadataFetchService()),
+          watchFoldersProvider
+              .overrideWith((ref) => Stream<List<Folder>>.value(const [])),
+          tagRepositoryProvider.overrideWithValue(tagRepo),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.build(),
+          home: Scaffold(
+            body: _Eager(child: InlineAddForm(onClose: onClose)),
+          ),
+        ),
+      );
+    }
+
+    Finder addTagsInput() => find.byWidgetPredicate((w) =>
+        w is TextField &&
+        w.decoration?.hintText == 'Add tags (comma to separate)');
+
+    testWidgets('opens with no pending tags; field present', (tester) async {
+      final tagRepo = _RecordingTagRepo();
+      await tester.pumpWidget(wrapWithTagRepo(
+        repo: _FakeRepo(),
+        tagRepo: tagRepo,
+        onClose: () {},
+      ));
+      await tester.pumpAndSettle();
+
+      expect(addTagsInput(), findsOneWidget);
+      expect(find.byType(InputChip), findsNothing);
+    });
+
+    testWidgets('Type "design" Enter -> chip appears in the form',
+        (tester) async {
+      final tagRepo = _RecordingTagRepo();
+      await tester.pumpWidget(wrapWithTagRepo(
+        repo: _FakeRepo(),
+        tagRepo: tagRepo,
+        onClose: () {},
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(addTagsInput(), 'design');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(InputChip), findsOneWidget);
+      expect(find.text('design'), findsOneWidget);
+    });
+
+    testWidgets('Type "ux, design" -> two chips appear', (tester) async {
+      final tagRepo = _RecordingTagRepo();
+      await tester.pumpWidget(wrapWithTagRepo(
+        repo: _FakeRepo(),
+        tagRepo: tagRepo,
+        onClose: () {},
+      ));
+      await tester.pumpAndSettle();
+
+      // Type the whole thing then commit by pressing Enter so both parts
+      // (split on the comma) are committed together.
+      await tester.enterText(addTagsInput(), 'ux, design');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(InputChip), findsNWidgets(2));
+      expect(find.text('ux'), findsOneWidget);
+      expect(find.text('design'), findsOneWidget);
+    });
+
+    testWidgets('Type "Flutter" then "flutter" -> dedup; only one chip',
+        (tester) async {
+      final tagRepo = _RecordingTagRepo();
+      await tester.pumpWidget(wrapWithTagRepo(
+        repo: _FakeRepo(),
+        tagRepo: tagRepo,
+        onClose: () {},
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(addTagsInput(), 'Flutter');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      await tester.enterText(addTagsInput(), 'flutter');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(InputChip), findsOneWidget);
+    });
+
+    testWidgets('Tap "x" on a chip removes it from form-local state',
+        (tester) async {
+      final tagRepo = _RecordingTagRepo();
+      await tester.pumpWidget(wrapWithTagRepo(
+        repo: _FakeRepo(),
+        tagRepo: tagRepo,
+        onClose: () {},
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(addTagsInput(), 'todo');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(find.byType(InputChip), findsOneWidget);
+
+      final chip = tester.widget<InputChip>(find.byType(InputChip));
+      chip.onDeleted!.call();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(InputChip), findsNothing);
+    });
+
+    testWidgets(
+        'Save with URL + 2 tags -> bookmark saved, then upsertAndLinkAll '
+        'called with those tags', (tester) async {
+      final repo = _FakeRepo();
+      final tagRepo = _RecordingTagRepo();
+      await tester.pumpWidget(wrapWithTagRepo(
+        repo: repo,
+        tagRepo: tagRepo,
+        onClose: () {},
+      ));
+      await tester.pumpAndSettle();
+
+      // Add tags first.
+      await tester.enterText(addTagsInput(), 'design, ux');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      // URL field is the autofocused TextField at order 1; find by hintText.
+      final urlField = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == 'Paste a URL',
+      );
+      await tester.enterText(urlField, 'https://example.com');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      // Notifier dispatches save async; let it run.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+
+      expect(repo.savedBookmarks.length, 1);
+      expect(repo.savedBookmarks.single.url, 'https://example.com');
+      expect(tagRepo.upsertAndLinkAllCalls.length, 1);
+      expect(
+        tagRepo.upsertAndLinkAllCalls.single.tagNames,
+        ['design', 'ux'],
+      );
+      expect(
+        tagRepo.upsertAndLinkAllCalls.single.bookmarkId,
+        repo.savedBookmarks.single.id,
+      );
+    });
+
+    testWidgets(
+        'Save with URL only (no tags) -> NO upsertAndLinkAll dispatch',
+        (tester) async {
+      final repo = _FakeRepo();
+      final tagRepo = _RecordingTagRepo();
+      await tester.pumpWidget(wrapWithTagRepo(
+        repo: repo,
+        tagRepo: tagRepo,
+        onClose: () {},
+      ));
+      await tester.pumpAndSettle();
+
+      final urlField = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == 'Paste a URL',
+      );
+      await tester.enterText(urlField, 'https://example.com');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+
+      expect(repo.savedBookmarks.length, 1);
+      expect(tagRepo.upsertAndLinkAllCalls, isEmpty,
+          reason: 'empty tagNames short-circuits the dispatch');
+    });
+
+    testWidgets('Esc with pending tags closes the form; no repo dispatch',
+        (tester) async {
+      var closed = false;
+      final repo = _FakeRepo();
+      final tagRepo = _RecordingTagRepo();
+      await tester.pumpWidget(wrapWithTagRepo(
+        repo: repo,
+        tagRepo: tagRepo,
+        onClose: () => closed = true,
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(addTagsInput(), 'todo');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(find.byType(InputChip), findsOneWidget);
+
+      // Focus the URL field (a descendant of the form's Shortcuts subtree)
+      // before sending Esc so the DismissIntent activator fires.
+      final urlField = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == 'Paste a URL',
+      );
+      await tester.tap(urlField);
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+
+      expect(closed, isTrue);
+      expect(repo.savedBookmarks, isEmpty);
+      expect(tagRepo.upsertAndLinkAllCalls, isEmpty);
+    });
+
+    testWidgets(
+        'Save when bookmark.save returns Err: tag dispatch does NOT run',
+        (tester) async {
+      final repo = _FakeRepo()..failNextSave = true;
+      final tagRepo = _RecordingTagRepo();
+      await tester.pumpWidget(wrapWithTagRepo(
+        repo: repo,
+        tagRepo: tagRepo,
+        onClose: () {},
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(addTagsInput(), 'design');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      final urlField = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == 'Paste a URL',
+      );
+      await tester.enterText(urlField, 'https://example.com');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+
+      // bookmarkRepository.save was attempted but failed.
+      expect(repo.saveAttempts, 1);
+      // tag dispatch is GATED by Ok save; never runs.
+      expect(tagRepo.upsertAndLinkAllCalls, isEmpty);
+    });
+
+    testWidgets(
+        'Save when tag link returns Err: bookmark survives; tag failure '
+        'recorded on repo (notifier-level surfacing tested elsewhere)',
+        (tester) async {
+      final repo = _FakeRepo();
+      final tagRepo = _RecordingTagRepo()..failUpsertAndLink = true;
+      await tester.pumpWidget(wrapWithTagRepo(
+        repo: repo,
+        tagRepo: tagRepo,
+        onClose: () {},
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(addTagsInput(), 'design');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      final urlField = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == 'Paste a URL',
+      );
+      await tester.enterText(urlField, 'https://example.com');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+
+      expect(repo.savedBookmarks.length, 1, reason: 'bookmark survived');
+      expect(tagRepo.upsertAndLinkAllCalls.length, 1);
+    });
+  });
+}
+
+class _RecordingTagRepo implements ITagRepository {
+  final List<({String bookmarkId, List<String> tagNames})>
+      upsertAndLinkAllCalls = <({String bookmarkId, List<String> tagNames})>[];
+  bool failUpsertAndLink = false;
+
+  @override
+  Stream<List<Tag>> watchAll() => const Stream<List<Tag>>.empty();
+
+  @override
+  Stream<List<Tag>> watchForBookmark(String bookmarkId) =>
+      const Stream<List<Tag>>.empty();
+
+  @override
+  Future<Result<Tag, AppError>> getById(String id) async =>
+      const Err<Tag, AppError>(NotFoundError());
+
+  @override
+  Future<Result<Tag, AppError>> findByName(String name) async =>
+      const Err<Tag, AppError>(NotFoundError());
+
+  @override
+  Future<Result<Tag, AppError>> upsertByName(String name) async {
+    final t = DateTime.fromMillisecondsSinceEpoch(0);
+    return Ok<Tag, AppError>(
+      Tag(id: name, name: name, createdAt: t, updatedAt: t),
+    );
+  }
+
+  @override
+  Future<Result<void, AppError>> linkBookmarkTag(
+          String bookmarkId, String tagId) async =>
+      const Ok<void, AppError>(null);
+
+  @override
+  Future<Result<void, AppError>> unlinkBookmarkTag(
+          String bookmarkId, String tagId) async =>
+      const Ok<void, AppError>(null);
+
+  @override
+  Future<Result<List<Tag>, AppError>> upsertAndLinkAll({
+    required String bookmarkId,
+    required List<String> tagNames,
+  }) async {
+    upsertAndLinkAllCalls
+        .add((bookmarkId: bookmarkId, tagNames: tagNames));
+    if (failUpsertAndLink) {
+      return const Err<List<Tag>, AppError>(StorageError('boom'));
+    }
+    return const Ok<List<Tag>, AppError>(<Tag>[]);
+  }
 }

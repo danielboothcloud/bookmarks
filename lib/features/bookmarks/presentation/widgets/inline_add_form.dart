@@ -26,6 +26,7 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
   bool _urlError = false;
   FocusNode? _previousFocus;
   String? _pendingFolderId;
+  List<String> _pendingTags = <String>[];
 
   @override
   void initState() {
@@ -73,6 +74,7 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
           url: url,
           title: _titleController.text,
           folderId: _pendingFolderId,
+          tagNames: _pendingTags,
         );
     widget.onClose();
   }
@@ -192,7 +194,15 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
                           setState(() => _pendingFolderId = next),
                     ),
                   ),
-                  // TODO(story-2.5): Tags field slots in here at order 4.
+                  const SizedBox(height: AppSpacing.md),
+                  FocusTraversalOrder(
+                    order: const NumericFocusOrder(4),
+                    child: _InlineFormTagsField(
+                      initialTags: _pendingTags,
+                      onChanged: (next) =>
+                          setState(() => _pendingTags = next),
+                    ),
+                  ),
                   const SizedBox(height: AppSpacing.md),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -220,6 +230,116 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Form-local tags input. Holds the pending tag list in StatefulWidget state
+/// (NOT a Notifier) because the list's lifecycle matches the form: Esc / Save
+/// closes the form and the list goes with it. Uses M3 InputChip (in-flight
+/// unconfirmed entry semantic) rather than FilterChip (which would claim the
+/// tag is "currently filtering" the not-yet-existent bookmark).
+class _InlineFormTagsField extends StatefulWidget {
+  const _InlineFormTagsField({
+    required this.initialTags,
+    required this.onChanged,
+  });
+
+  final List<String> initialTags;
+  final ValueChanged<List<String>> onChanged;
+
+  @override
+  State<_InlineFormTagsField> createState() => _InlineFormTagsFieldState();
+}
+
+class _InlineFormTagsFieldState extends State<_InlineFormTagsField> {
+  late final List<String> _tags = List<String>.from(widget.initialTags);
+  final _controller = TextEditingController();
+  final _focusNode = FocusNode(debugLabel: 'inline-add-tags');
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _commit() {
+    final raw = _controller.text;
+    final parts = raw
+        .split(',')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList(growable: false);
+    if (parts.isEmpty) {
+      _controller.clear();
+      return;
+    }
+    // Dedup case-insensitively while preserving insertion order.
+    final seen = _tags.map((s) => s.toLowerCase()).toSet();
+    var changed = false;
+    for (final p in parts) {
+      if (seen.add(p.toLowerCase())) {
+        _tags.add(p);
+        changed = true;
+      }
+    }
+    _controller.clear();
+    if (changed) {
+      widget.onChanged(List<String>.from(_tags));
+      setState(() {});
+    }
+  }
+
+  void _remove(String tag) {
+    _tags.removeWhere((t) => t.toLowerCase() == tag.toLowerCase());
+    widget.onChanged(List<String>.from(_tags));
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_tags.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+            child: Wrap(
+              spacing: AppSpacing.xs,
+              runSpacing: AppSpacing.xs,
+              children: [
+                for (final tag in _tags)
+                  InputChip(
+                    label: Text(tag),
+                    onDeleted: () => _remove(tag),
+                    deleteIconColor: AppColors.textMuted,
+                    backgroundColor:
+                        AppColors.accent.withValues(alpha: 0.10),
+                    side: const BorderSide(color: AppColors.border),
+                    labelStyle: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textBody,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        TextField(
+          controller: _controller,
+          focusNode: _focusNode,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => _commit(),
+          onChanged: (next) {
+            if (next.endsWith(',')) _commit();
+          },
+          decoration: const InputDecoration(
+            hintText: 'Add tags (comma to separate)',
+            isDense: true,
+            border: OutlineInputBorder(),
+          ),
+        ),
+      ],
     );
   }
 }

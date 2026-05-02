@@ -1,0 +1,281 @@
+import 'package:drift/drift.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../../core/database/app_database.dart';
+import '../../../core/error/app_error.dart';
+import '../../../core/error/result.dart';
+import '../domain/i_tag_repository.dart';
+import '../domain/tag.dart';
+
+class TagRepository implements ITagRepository {
+  TagRepository(this._db);
+
+  final AppDatabase _db;
+  static const _uuid = Uuid();
+
+  @override
+  Stream<List<Tag>> watchAll() {
+    // Alpha-by-name (case-insensitive) -- COLLATE NOCASE ensures "Flutter"
+    // and "flutter" sort together regardless of which case was stored. Drift's
+    // typed query builder doesn't expose COLLATE ergonomically, so a
+    // customSelect with explicit SQL is clearer.
+    return _db
+        .customSelect(
+          'SELECT * FROM tags ORDER BY name COLLATE NOCASE ASC',
+          readsFrom: {_db.tags},
+        )
+        .watch()
+        .map(
+          (rows) => rows
+              .map(
+                (r) => Tag(
+                  id: r.read<String>('id'),
+                  name: r.read<String>('name'),
+                  createdAt: DateTime.fromMillisecondsSinceEpoch(
+                    r.read<int>('created_at'),
+                  ),
+                  updatedAt: DateTime.fromMillisecondsSinceEpoch(
+                    r.read<int>('updated_at'),
+                  ),
+                ),
+              )
+              .toList(growable: false),
+        );
+  }
+
+  @override
+  Stream<List<Tag>> watchForBookmark(String bookmarkId) {
+    // Inner join via custom SQL -- typed Drift joins are possible but verbose;
+    // the SQL here is short and explicit about the order. ORDER BY
+    // bt.created_at ASC = "tags appear in the order the user added them"
+    // (AC2 chip ordering).
+    return _db
+        .customSelect(
+          'SELECT t.* FROM tags t '
+          'INNER JOIN bookmark_tags bt ON bt.tag_id = t.id '
+          'WHERE bt.bookmark_id = ? '
+          'ORDER BY bt.created_at ASC',
+          variables: [Variable<String>(bookmarkId)],
+          readsFrom: {_db.tags, _db.bookmarkTags},
+        )
+        .watch()
+        .map(
+          (rows) => rows
+              .map(
+                (r) => Tag(
+                  id: r.read<String>('id'),
+                  name: r.read<String>('name'),
+                  createdAt: DateTime.fromMillisecondsSinceEpoch(
+                    r.read<int>('created_at'),
+                  ),
+                  updatedAt: DateTime.fromMillisecondsSinceEpoch(
+                    r.read<int>('updated_at'),
+                  ),
+                ),
+              )
+              .toList(growable: false),
+        );
+  }
+
+  @override
+  Future<Result<Tag, AppError>> getById(String id) async {
+    try {
+      final row = await (_db.select(_db.tags)..where((t) => t.id.equals(id)))
+          .getSingleOrNull();
+      if (row == null) return const Err<Tag, AppError>(NotFoundError());
+      return Ok<Tag, AppError>(Tag.fromDrift(row));
+    } catch (e) {
+      return Err<Tag, AppError>(StorageError(e.toString()));
+    }
+  }
+
+  @override
+  Future<Result<Tag, AppError>> findByName(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      return const Err<Tag, AppError>(NotFoundError());
+    }
+    try {
+      // lower(name) = lower(?) leverages the functional UNIQUE index.
+      final row = await _db
+          .customSelect(
+            'SELECT * FROM tags WHERE lower(name) = lower(?) LIMIT 1',
+            variables: [Variable<String>(trimmed)],
+            readsFrom: {_db.tags},
+          )
+          .getSingleOrNull();
+      if (row == null) return const Err<Tag, AppError>(NotFoundError());
+      return Ok<Tag, AppError>(
+        Tag(
+          id: row.read<String>('id'),
+          name: row.read<String>('name'),
+          createdAt: DateTime.fromMillisecondsSinceEpoch(
+            row.read<int>('created_at'),
+          ),
+          updatedAt: DateTime.fromMillisecondsSinceEpoch(
+            row.read<int>('updated_at'),
+          ),
+        ),
+      );
+    } catch (e) {
+      return Err<Tag, AppError>(StorageError(e.toString()));
+    }
+  }
+
+  @override
+  Future<Result<Tag, AppError>> upsertByName(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      return const Err<Tag, AppError>(
+        StorageError('Tag name cannot be empty'),
+      );
+    }
+    // Find first; if found, return as-is (createdAt preserved).
+    final existing = await findByName(trimmed);
+    if (existing case Ok(:final value)) return Ok<Tag, AppError>(value);
+
+    try {
+      final now = DateTime.now();
+      final tag = Tag(
+        id: _uuid.v4(),
+        name: trimmed,
+        createdAt: now,
+        updatedAt: now,
+      );
+      await _db.into(_db.tags).insert(_toCompanion(tag));
+      return Ok<Tag, AppError>(tag);
+    } catch (e) {
+      // Race recovery: between findByName's miss and our insert, a concurrent
+      // caller may have inserted the same lower(name). The UNIQUE index throws
+      // -- re-resolve via findByName.
+      final raceResolution = await findByName(trimmed);
+      if (raceResolution case Ok(:final value)) {
+        return Ok<Tag, AppError>(value);
+      }
+      return Err<Tag, AppError>(StorageError(e.toString()));
+    }
+  }
+
+  @override
+  Future<Result<void, AppError>> linkBookmarkTag(
+    String bookmarkId,
+    String tagId,
+  ) async {
+    try {
+      // INSERT OR IGNORE on the composite PK: re-linking the same
+      // (bookmarkId, tagId) is a no-op rather than an error. Matches AC1's
+      // "submitting the same name twice is idempotent".
+      await _db.into(_db.bookmarkTags).insert(
+            BookmarkTagsCompanion(
+              bookmarkId: Value(bookmarkId),
+              tagId: Value(tagId),
+              createdAt: Value(DateTime.now().millisecondsSinceEpoch),
+            ),
+            mode: InsertMode.insertOrIgnore,
+          );
+      return const Ok<void, AppError>(null);
+    } catch (e) {
+      return Err<void, AppError>(StorageError(e.toString()));
+    }
+  }
+
+  @override
+  Future<Result<void, AppError>> unlinkBookmarkTag(
+    String bookmarkId,
+    String tagId,
+  ) async {
+    try {
+      await (_db.delete(_db.bookmarkTags)
+            ..where(
+              (t) => t.bookmarkId.equals(bookmarkId) & t.tagId.equals(tagId),
+            ))
+          .go();
+      // We DON'T return Err on affected==0 (unlike BookmarkRepository.delete
+      // which does for NotFound semantics). An idempotent unlink is the right
+      // behaviour: removing a chip that's already gone (e.g. via a sync merge)
+      // shouldn't surface as an error to the user.
+      return const Ok<void, AppError>(null);
+    } catch (e) {
+      return Err<void, AppError>(StorageError(e.toString()));
+    }
+  }
+
+  @override
+  Future<Result<List<Tag>, AppError>> upsertAndLinkAll({
+    required String bookmarkId,
+    required List<String> tagNames,
+  }) async {
+    // Dedup case-insensitively, preserving first-occurrence case for display
+    // fidelity. ["Flutter", "flutter", "DART"] -> ["Flutter", "DART"].
+    final seen = <String>{};
+    final ordered = <String>[];
+    for (final raw in tagNames) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) continue;
+      if (seen.add(trimmed.toLowerCase())) ordered.add(trimmed);
+    }
+    if (ordered.isEmpty) {
+      return const Ok<List<Tag>, AppError>(<Tag>[]);
+    }
+    try {
+      final result = await _db.transaction(() async {
+        final tags = <Tag>[];
+        for (final name in ordered) {
+          // Reuse upsertByName but inside the transaction. We don't call the
+          // public method (its try/catch + race-recovery path is designed for
+          // the no-transaction case); inline the lookup-then-insert flow to
+          // keep transaction semantics tight.
+          final existing = await _db
+              .customSelect(
+                'SELECT * FROM tags WHERE lower(name) = lower(?) LIMIT 1',
+                variables: [Variable<String>(name)],
+                readsFrom: {_db.tags},
+              )
+              .getSingleOrNull();
+          Tag tag;
+          if (existing != null) {
+            tag = Tag(
+              id: existing.read<String>('id'),
+              name: existing.read<String>('name'),
+              createdAt: DateTime.fromMillisecondsSinceEpoch(
+                existing.read<int>('created_at'),
+              ),
+              updatedAt: DateTime.fromMillisecondsSinceEpoch(
+                existing.read<int>('updated_at'),
+              ),
+            );
+          } else {
+            final now = DateTime.now();
+            tag = Tag(
+              id: _uuid.v4(),
+              name: name,
+              createdAt: now,
+              updatedAt: now,
+            );
+            await _db.into(_db.tags).insert(_toCompanion(tag));
+          }
+          tags.add(tag);
+          await _db.into(_db.bookmarkTags).insert(
+                BookmarkTagsCompanion(
+                  bookmarkId: Value(bookmarkId),
+                  tagId: Value(tag.id),
+                  createdAt: Value(DateTime.now().millisecondsSinceEpoch),
+                ),
+                mode: InsertMode.insertOrIgnore,
+              );
+        }
+        return tags;
+      });
+      return Ok<List<Tag>, AppError>(result);
+    } catch (e) {
+      return Err<List<Tag>, AppError>(StorageError(e.toString()));
+    }
+  }
+
+  TagsCompanion _toCompanion(Tag t) => TagsCompanion(
+        id: Value(t.id),
+        name: Value(t.name),
+        createdAt: Value(t.createdAt.millisecondsSinceEpoch),
+        updatedAt: Value(t.updatedAt.millisecondsSinceEpoch),
+      );
+}

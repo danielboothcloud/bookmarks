@@ -5,6 +5,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_spacing.dart';
 import '../../../../core/util/url_launcher_service.dart';
 import '../../../../core/widgets/favicon_widget.dart';
+import '../../../tags/presentation/widgets/bookmark_tag_chip_row.dart';
 import '../../application/bookmark_providers.dart';
 import '../../domain/bookmark.dart';
 
@@ -79,7 +80,8 @@ class BookmarkCard extends ConsumerWidget {
                         color: AppColors.textMuted,
                       ),
                     ),
-                    // TODO(story-2.5): tag chips row goes here.
+                    const SizedBox(height: 4),
+                    BookmarkTagChipRow(bookmarkId: bookmark.id),
                   ],
                 ),
               ),

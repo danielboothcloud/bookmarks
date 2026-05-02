@@ -13,6 +13,9 @@ import 'package:bookmarks/features/bookmarks/presentation/widgets/bookmark_detai
 import 'package:bookmarks/features/bookmarks/presentation/widgets/bookmark_folder_field.dart';
 import 'package:bookmarks/features/folders/application/folder_providers.dart';
 import 'package:bookmarks/features/folders/domain/folder.dart';
+import 'package:bookmarks/features/tags/application/tag_providers.dart';
+import 'package:bookmarks/features/tags/domain/i_tag_repository.dart';
+import 'package:bookmarks/features/tags/domain/tag.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -54,6 +57,48 @@ class _NoopMetadataFetchService implements MetadataFetchService {
   void close() {}
 }
 
+class _NoopTagRepo implements ITagRepository {
+  @override
+  Stream<List<Tag>> watchAll() => const Stream<List<Tag>>.empty();
+
+  @override
+  Stream<List<Tag>> watchForBookmark(String bookmarkId) =>
+      Stream<List<Tag>>.value(const <Tag>[]);
+
+  @override
+  Future<Result<Tag, AppError>> getById(String id) async =>
+      const Err<Tag, AppError>(NotFoundError());
+
+  @override
+  Future<Result<Tag, AppError>> findByName(String name) async =>
+      const Err<Tag, AppError>(NotFoundError());
+
+  @override
+  Future<Result<Tag, AppError>> upsertByName(String name) async {
+    final t = DateTime.fromMillisecondsSinceEpoch(0);
+    return Ok<Tag, AppError>(
+      Tag(id: name, name: name, createdAt: t, updatedAt: t),
+    );
+  }
+
+  @override
+  Future<Result<void, AppError>> linkBookmarkTag(
+          String bookmarkId, String tagId) async =>
+      const Ok<void, AppError>(null);
+
+  @override
+  Future<Result<void, AppError>> unlinkBookmarkTag(
+          String bookmarkId, String tagId) async =>
+      const Ok<void, AppError>(null);
+
+  @override
+  Future<Result<List<Tag>, AppError>> upsertAndLinkAll({
+    required String bookmarkId,
+    required List<String> tagNames,
+  }) async =>
+      const Ok<List<Tag>, AppError>(<Tag>[]);
+}
+
 Bookmark _bm(
   String id, {
   String title = 'Title',
@@ -84,6 +129,7 @@ Widget _wrap(IBookmarkRepository repo, {Stream<List<Folder>>? folders}) {
       metadataFetchServiceProvider
           .overrideWithValue(_NoopMetadataFetchService()),
       watchFoldersProvider.overrideWith((ref) => folderStream),
+      tagRepositoryProvider.overrideWithValue(_NoopTagRepo()),
     ],
     child: MaterialApp(
       theme: AppTheme.build(),
@@ -137,8 +183,9 @@ void main() {
     expect(find.byType(TextField), findsNothing);
   });
 
-  testWidgets('populated state renders 3 fields, 36px favicon, Open button (AC1)',
-      (tester) async {
+  testWidgets(
+      'populated state renders 4 fields (title/url/notes/tags), 36px favicon, '
+      'Open button (AC1)', (tester) async {
     final controller = StreamController<List<Bookmark>>.broadcast();
     addTearDown(controller.close);
     final repo = _FakeRepo(controller);
@@ -150,7 +197,8 @@ void main() {
     _container(tester).read(selectedBookmarkIdProvider.notifier).select('a');
     await tester.pumpAndSettle();
 
-    expect(find.byType(TextField), findsNWidgets(3));
+    // Story 2.5 added a 4th TextField for the inline tags input.
+    expect(find.byType(TextField), findsNWidgets(4));
     expect(find.widgetWithText(FilledButton, 'Open'), findsOneWidget);
     final favicon = tester.widget<FaviconWidget>(find.byType(FaviconWidget));
     expect(favicon.size, 36);
@@ -212,7 +260,9 @@ void main() {
     _container(tester).read(selectedBookmarkIdProvider.notifier).select('a');
     await tester.pumpAndSettle();
 
-    final notesField = find.byType(TextField).at(2);
+    // Story 2.5 inserted the tags input as the 3rd TextField in the pane;
+    // notes is now index 3.
+    final notesField = find.byType(TextField).at(3);
     await tester.tap(notesField);
     await tester.pumpAndSettle();
     await tester.enterText(notesField, 'Hello\nWorld');
@@ -331,7 +381,9 @@ void main() {
 
     final titleField = find.byType(TextField).first;
     final urlField = find.byType(TextField).at(1);
-    final notesField = find.byType(TextField).at(2);
+    // Story 2.5 inserted the tags input as TextField #2 between folder and
+    // notes; notes is now TextField #3.
+    final notesField = find.byType(TextField).at(3);
 
     await tester.tap(titleField);
     await tester.pumpAndSettle();
@@ -342,18 +394,21 @@ void main() {
     expect(tester.widget<TextField>(urlField).focusNode!.hasFocus, isTrue,
         reason: 'Tab from title must focus URL');
 
-    // Story 2.3 inserts the folder field at order 3; Tab from URL lands on
-    // the folder field's InkWell (NOT a TextField), so notes is now the
-    // FOURTH stop in the cycle.
+    // Tab from URL -> folder field (InkWell, not a TextField).
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.pumpAndSettle();
     expect(tester.widget<TextField>(urlField).focusNode!.hasFocus, isFalse,
         reason: 'Tab leaves URL on second press');
 
+    // Tab from folder -> tags input.
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pumpAndSettle();
+
+    // Tab from tags input -> notes.
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.pumpAndSettle();
     expect(tester.widget<TextField>(notesField).focusNode!.hasFocus, isTrue,
-        reason: 'Tab past folder lands on notes');
+        reason: 'Tab past folder + tags lands on notes');
   });
 
   group('delete flow (Story 1.5 -- moved into detail pane)', () {
@@ -421,8 +476,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(c.read(pendingDeleteIdProvider), isNull);
-      expect(find.byType(TextField), findsNWidgets(3),
-          reason: 'editing fields return after cancel');
+      expect(find.byType(TextField), findsNWidgets(4),
+          reason: 'editing fields return after cancel '
+              '(title/url/tags-input/notes)');
     });
 
     testWidgets(

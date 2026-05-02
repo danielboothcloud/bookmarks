@@ -6,6 +6,9 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_spacing.dart';
 import '../../../../core/util/url_launcher_service.dart';
 import '../../../../core/widgets/favicon_widget.dart';
+import '../../../tags/application/tag_notifier.dart';
+import '../../../tags/application/tag_providers.dart';
+import '../../../tags/domain/tag.dart';
 import '../../application/bookmark_notifier.dart';
 import '../../application/bookmark_providers.dart';
 import '../../domain/bookmark.dart';
@@ -368,8 +371,17 @@ class _PopulatedBody extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: AppSpacing.md),
+              // Tags row (Story 2.5). Slots between Folder (3) and Notes (5)
+              // per the UX-spec form-field order URL -> Title -> Folder ->
+              // Tags -> Notes. Notes/Open renumbered from 4/5 to 5/6 to make
+              // room.
               FocusTraversalOrder(
                 order: const NumericFocusOrder(4),
+                child: _TagsRow(bookmarkId: bookmark.id, editable: true),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              FocusTraversalOrder(
+                order: const NumericFocusOrder(5),
                 child: TextField(
                   controller: notesController,
                   focusNode: notesFocus,
@@ -383,7 +395,7 @@ class _PopulatedBody extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.md),
               FocusTraversalOrder(
-                order: const NumericFocusOrder(5),
+                order: const NumericFocusOrder(6),
                 child: SizedBox(
                   width: double.infinity,
                   height: 44,
@@ -533,6 +545,145 @@ class _DeleteConfirmationState extends State<_DeleteConfirmation> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Row of tag FilterChips for the currently-displayed bookmark with an inline
+/// add input below. Lives inside the detail pane (Story 2.5 Task 6) because
+/// it's tightly coupled to the pane's selection lifecycle. Read-only chip
+/// rows used by BookmarkListItem / BookmarkCard live in
+/// `features/tags/presentation/widgets/bookmark_tag_chip_row.dart`.
+class _TagsRow extends ConsumerStatefulWidget {
+  const _TagsRow({
+    required this.bookmarkId,
+    required this.editable,
+  });
+
+  final String bookmarkId;
+  final bool editable;
+
+  @override
+  ConsumerState<_TagsRow> createState() => _TagsRowState();
+}
+
+class _TagsRowState extends ConsumerState<_TagsRow> {
+  final _controller = TextEditingController();
+  final _focusNode = FocusNode(debugLabel: 'detail-tags-input');
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _commit() {
+    final raw = _controller.text;
+    // Comma-separated batch entry: "design, ux, typography" creates three tags
+    // in one Enter-press. Mirrors the chip-input idiom from Slack / Notion /
+    // GitHub. Trim each part; empty parts (from "design,,ux") are silently
+    // skipped.
+    final parts = raw
+        .split(',')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList(growable: false);
+    if (parts.isEmpty) {
+      // Whitespace-only or empty: no-op, just clear the field.
+      _controller.clear();
+      return;
+    }
+    for (final name in parts) {
+      ref.read(tagNotifierProvider.notifier).addTagToBookmark(
+            bookmarkId: widget.bookmarkId,
+            name: name,
+          );
+    }
+    _controller.clear();
+    // Sticky focus -- user stays in "adding tags" mode without re-clicking.
+    _focusNode.requestFocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tagsAsync =
+        ref.watch(watchTagsForBookmarkProvider(widget.bookmarkId));
+    final tags = tagsAsync.value ?? const <Tag>[];
+    return Semantics(
+      container: true,
+      label: 'Tags',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (tags.isEmpty)
+            const Text(
+              'No tags',
+              style: TextStyle(
+                fontSize: 13,
+                fontStyle: FontStyle.italic,
+                color: AppColors.textMuted,
+              ),
+            )
+          else
+            Wrap(
+              spacing: AppSpacing.xs,
+              runSpacing: AppSpacing.xs,
+              children: [
+                for (final tag in tags)
+                  FilterChip(
+                    label: Text(tag.name),
+                    // Selected state is "this tag is on this bookmark"; every
+                    // chip we render IS selected, so set true. The visual is
+                    // the chip's accent fill.
+                    selected: true,
+                    onSelected: (_) {},
+                    onDeleted: widget.editable
+                        ? () => ref
+                            .read(tagNotifierProvider.notifier)
+                            .removeTagFromBookmark(
+                              bookmarkId: widget.bookmarkId,
+                              tagId: tag.id,
+                            )
+                        : null,
+                    deleteIconColor: AppColors.textMuted,
+                    selectedColor:
+                        AppColors.accent.withValues(alpha: 0.15),
+                    backgroundColor: AppColors.surfaceContent,
+                    side: const BorderSide(color: AppColors.border),
+                    labelStyle: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textBody,
+                    ),
+                  ),
+              ],
+            ),
+          if (widget.editable) ...[
+            const SizedBox(height: AppSpacing.xs),
+            TextField(
+              controller: _controller,
+              focusNode: _focusNode,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _commit(),
+              // Comma triggers commit so the user can enter "ux, design" in
+              // one go; comma-as-commit is widely understood from
+              // Slack/Notion. Listening on onChanged for the comma character
+              // (rather than a TextInputFormatter) means pasted text with
+              // commas also triggers commits.
+              onChanged: (next) {
+                if (next.endsWith(',')) {
+                  _commit();
+                }
+              },
+              decoration: const InputDecoration(
+                hintText: 'Add a tag',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

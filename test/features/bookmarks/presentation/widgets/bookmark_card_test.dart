@@ -9,6 +9,10 @@ import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
 import 'package:bookmarks/features/bookmarks/domain/i_bookmark_repository.dart';
 import 'package:bookmarks/features/bookmarks/domain/url_metadata.dart';
 import 'package:bookmarks/features/bookmarks/presentation/widgets/bookmark_card.dart';
+import 'package:bookmarks/features/tags/application/tag_providers.dart';
+import 'package:bookmarks/features/tags/domain/i_tag_repository.dart';
+import 'package:bookmarks/features/tags/domain/tag.dart';
+import 'package:bookmarks/features/tags/presentation/widgets/bookmark_tag_chip_row.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -38,6 +42,56 @@ class _NoopMetadataFetchService implements MetadataFetchService {
   void close() {}
 }
 
+class _SeededTagRepo implements ITagRepository {
+  _SeededTagRepo(this._tagsByBookmark);
+  final Map<String, List<Tag>> _tagsByBookmark;
+
+  @override
+  Stream<List<Tag>> watchAll() => const Stream<List<Tag>>.empty();
+
+  @override
+  Stream<List<Tag>> watchForBookmark(String bookmarkId) =>
+      Stream<List<Tag>>.value(_tagsByBookmark[bookmarkId] ?? const <Tag>[]);
+
+  @override
+  Future<Result<Tag, AppError>> getById(String id) async =>
+      const Err<Tag, AppError>(NotFoundError());
+
+  @override
+  Future<Result<Tag, AppError>> findByName(String name) async =>
+      const Err<Tag, AppError>(NotFoundError());
+
+  @override
+  Future<Result<Tag, AppError>> upsertByName(String name) async {
+    final t = DateTime.fromMillisecondsSinceEpoch(0);
+    return Ok<Tag, AppError>(
+      Tag(id: name, name: name, createdAt: t, updatedAt: t),
+    );
+  }
+
+  @override
+  Future<Result<void, AppError>> linkBookmarkTag(
+          String bookmarkId, String tagId) async =>
+      const Ok<void, AppError>(null);
+
+  @override
+  Future<Result<void, AppError>> unlinkBookmarkTag(
+          String bookmarkId, String tagId) async =>
+      const Ok<void, AppError>(null);
+
+  @override
+  Future<Result<List<Tag>, AppError>> upsertAndLinkAll({
+    required String bookmarkId,
+    required List<String> tagNames,
+  }) async =>
+      const Ok<List<Tag>, AppError>(<Tag>[]);
+}
+
+Tag _tag(String name) {
+  final t = DateTime.fromMillisecondsSinceEpoch(0);
+  return Tag(id: name, name: name, createdAt: t, updatedAt: t);
+}
+
 Bookmark _bm(String id, {String? title, String? url}) {
   final t = DateTime.fromMillisecondsSinceEpoch(1000);
   return Bookmark(
@@ -52,6 +106,7 @@ Bookmark _bm(String id, {String? title, String? url}) {
 Widget _wrap({
   required Bookmark bookmark,
   ProviderContainer? container,
+  ITagRepository? tagRepo,
 }) {
   final theme = AppTheme.build();
   final body = MaterialApp(
@@ -73,6 +128,8 @@ Widget _wrap({
       bookmarkRepositoryProvider.overrideWithValue(_NoopRepo()),
       metadataFetchServiceProvider
           .overrideWithValue(_NoopMetadataFetchService()),
+      tagRepositoryProvider
+          .overrideWithValue(tagRepo ?? _SeededTagRepo(const {})),
     ],
     child: body,
   );
@@ -102,6 +159,7 @@ void main() {
       bookmarkRepositoryProvider.overrideWithValue(_NoopRepo()),
       metadataFetchServiceProvider
           .overrideWithValue(_NoopMetadataFetchService()),
+      tagRepositoryProvider.overrideWithValue(_SeededTagRepo(const {})),
     ]);
     addTearDown(container.dispose);
 
@@ -125,6 +183,7 @@ void main() {
       bookmarkRepositoryProvider.overrideWithValue(_NoopRepo()),
       metadataFetchServiceProvider
           .overrideWithValue(_NoopMetadataFetchService()),
+      tagRepositoryProvider.overrideWithValue(_SeededTagRepo(const {})),
     ]);
     addTearDown(container.dispose);
 
@@ -193,5 +252,28 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('not-a-url'), findsOneWidget);
+  });
+
+  testWidgets('card with no tags renders the chip-row widget at zero height',
+      (tester) async {
+    await tester.pumpWidget(_wrap(bookmark: _bm('a')));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(BookmarkTagChipRow), findsOneWidget);
+    final size = tester.getSize(find.byType(BookmarkTagChipRow));
+    expect(size.height, 0,
+        reason: 'no-tags state collapses to SizedBox.shrink');
+  });
+
+  testWidgets('card with 2 tags renders the chip names below the URL row',
+      (tester) async {
+    final tagRepo = _SeededTagRepo({
+      'a': [_tag('design'), _tag('ux')],
+    });
+    await tester.pumpWidget(_wrap(bookmark: _bm('a'), tagRepo: tagRepo));
+    await tester.pumpAndSettle();
+
+    expect(find.text('design'), findsOneWidget);
+    expect(find.text('ux'), findsOneWidget);
   });
 }
