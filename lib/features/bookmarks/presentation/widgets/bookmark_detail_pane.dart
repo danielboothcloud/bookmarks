@@ -9,6 +9,7 @@ import '../../../../core/widgets/favicon_widget.dart';
 import '../../application/bookmark_notifier.dart';
 import '../../application/bookmark_providers.dart';
 import '../../domain/bookmark.dart';
+import 'bookmark_folder_field.dart';
 
 /// Inline-edit detail pane for the currently-selected bookmark (Story 1.4).
 /// Three visual states:
@@ -95,12 +96,19 @@ class _BookmarkDetailPaneState extends ConsumerState<BookmarkDetailPane> {
   // and avoids the bookkeeping of "previous focus state".
   void _onAnyFocusLost() => _saveDirty();
 
-  /// Atomic save: builds the next bookmark from ALL three controllers in one
-  /// pass, then writes via `updateBookmark`. This avoids a lost-update race
-  /// when the user blurs across fields faster than Drift's stream can emit
-  /// (each old per-field save read a stale snapshot for the OTHER two fields
-  /// and overwrote concurrent edits).
-  void _saveDirty() {
+  /// Atomic save from focus loss / Enter. Delegates to [_writeNext] so the
+  /// merge logic stays single-source.
+  void _saveDirty() => _writeNext();
+
+  /// Builds the next bookmark from the LIVE bookmark + current controller
+  /// text + an optional folder override, then dispatches a single
+  /// `updateBookmark`. Reading fresh state inside this method (rather than
+  /// trusting a closure-captured bookmark) prevents a lost-update race when
+  /// a folder pick lands between `_saveDirty`'s text-save dispatch and the
+  /// Drift stream's re-emit -- without the merge, the folder write would
+  /// copyWith over the stale closure values and clobber the in-flight text
+  /// edit. Same atomic-merge rationale as Story 1.4's per-field save fix.
+  void _writeNext({String? Function()? folderIdOverride}) {
     final bookmark = ref.read(selectedBookmarkProvider);
     if (bookmark == null) return;
 
@@ -124,9 +132,13 @@ class _BookmarkDetailPaneState extends ConsumerState<BookmarkDetailPane> {
     final notesText = _notesController.text;
     final nextNotes = notesText.isEmpty ? null : notesText;
 
+    final nextFolderId =
+        folderIdOverride != null ? folderIdOverride() : bookmark.folderId;
+
     if (nextTitle == bookmark.title &&
         nextUrl == bookmark.url &&
-        nextNotes == bookmark.notes) {
+        nextNotes == bookmark.notes &&
+        nextFolderId == bookmark.folderId) {
       return;
     }
 
@@ -135,6 +147,7 @@ class _BookmarkDetailPaneState extends ConsumerState<BookmarkDetailPane> {
             title: nextTitle,
             url: nextUrl,
             notes: nextNotes,
+            folderId: nextFolderId,
           ),
         );
   }
@@ -184,6 +197,16 @@ class _BookmarkDetailPaneState extends ConsumerState<BookmarkDetailPane> {
   void _cancelDelete() =>
       ref.read(pendingDeleteIdProvider.notifier).clear();
 
+  /// Routes a folder pick from `BookmarkFolderField` through the merged-write
+  /// path. Going through [_writeNext] (rather than dispatching a folder-only
+  /// copyWith) means any uncommitted text-controller edit is folded into the
+  /// SAME write, eliminating the stale-closure race. The idempotent guard --
+  /// "no-op when nothing changed" -- lives inside [_writeNext] and now covers
+  /// folderId too, so re-picking the current folder still avoids a write.
+  void _onFolderChanged(String? newFolderId) {
+    _writeNext(folderIdOverride: () => newFolderId);
+  }
+
   @override
   Widget build(BuildContext context) {
     final bookmark = ref.watch(selectedBookmarkProvider);
@@ -217,6 +240,7 @@ class _BookmarkDetailPaneState extends ConsumerState<BookmarkDetailPane> {
                   onPromptDelete: () => ref
                       .read(pendingDeleteIdProvider.notifier)
                       .prompt(bookmark.id),
+                  onFolderChanged: _onFolderChanged,
                 ),
     );
   }
@@ -247,6 +271,7 @@ class _PopulatedBody extends StatelessWidget {
     required this.notesFocus,
     required this.onSave,
     required this.onPromptDelete,
+    required this.onFolderChanged,
   });
 
   final Bookmark bookmark;
@@ -258,6 +283,7 @@ class _PopulatedBody extends StatelessWidget {
   final FocusNode notesFocus;
   final VoidCallback onSave;
   final VoidCallback onPromptDelete;
+  final ValueChanged<String?> onFolderChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -330,8 +356,20 @@ class _PopulatedBody extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: AppSpacing.md),
+              // Folder assignment (Story 2.3). Sits between URL and Notes --
+              // matches the UX-spec form-field order (URL -> Title -> Folder
+              // -> Tags -> Notes). Selection commits immediately on pick;
+              // does NOT participate in the focus-loss save cascade.
               FocusTraversalOrder(
                 order: const NumericFocusOrder(3),
+                child: BookmarkFolderField(
+                  currentFolderId: bookmark.folderId,
+                  onChanged: onFolderChanged,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              FocusTraversalOrder(
+                order: const NumericFocusOrder(4),
                 child: TextField(
                   controller: notesController,
                   focusNode: notesFocus,
@@ -345,7 +383,7 @@ class _PopulatedBody extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.md),
               FocusTraversalOrder(
-                order: const NumericFocusOrder(4),
+                order: const NumericFocusOrder(5),
                 child: SizedBox(
                   width: double.infinity,
                   height: 44,

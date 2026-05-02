@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_spacing.dart';
+import '../../../folders/application/folder_providers.dart';
 import '../../application/bookmark_notifier.dart';
+import 'bookmark_folder_field.dart';
 
 class InlineAddForm extends ConsumerStatefulWidget {
   const InlineAddForm({required this.onClose, super.key});
@@ -22,6 +24,7 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
   final _titleFocusNode = FocusNode(debugLabel: 'inline-add-title');
   bool _urlError = false;
   FocusNode? _previousFocus;
+  String? _pendingFolderId;
 
   @override
   void initState() {
@@ -29,6 +32,12 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
     // Capture whatever held focus before the form opened so we can return
     // it on close (AC2: "focus returns to the previous context").
     _previousFocus = FocusManager.instance.primaryFocus;
+    // Pre-fill from the sidebar's current folder selection. Reads the
+    // notifier directly (no BuildContext required), avoiding a post-frame
+    // flicker. `selectedFolderIdProvider` is cleared by the navrail Folders
+    // tap (Story 2.2), so a non-null value reliably means "user is currently
+    // viewing this folder" -- the right intent signal for the new bookmark.
+    _pendingFolderId = ref.read(selectedFolderIdProvider);
   }
 
   @override
@@ -59,9 +68,11 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
       _urlFocusNode.requestFocus();
       return;
     }
-    ref
-        .read(bookmarkNotifierProvider.notifier)
-        .addBookmark(url: url, title: _titleController.text);
+    ref.read(bookmarkNotifierProvider.notifier).addBookmark(
+          url: url,
+          title: _titleController.text,
+          folderId: _pendingFolderId,
+        );
     widget.onClose();
   }
 
@@ -149,14 +160,25 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
                       ),
                     ),
                   ),
-                  // TODO(story-2.3): Folder selector slots in here.
-                  // TODO(story-2.5): Tags field slots in here.
+                  const SizedBox(height: AppSpacing.md),
+                  // Folder selector (Story 2.3). Order 3; tags will land at
+                  // order 4 in Story 2.5 -- leaving 4 reserved here means
+                  // 2.5 doesn't have to renumber Save/Cancel again.
+                  FocusTraversalOrder(
+                    order: const NumericFocusOrder(3),
+                    child: BookmarkFolderField(
+                      currentFolderId: _pendingFolderId,
+                      onChanged: (next) =>
+                          setState(() => _pendingFolderId = next),
+                    ),
+                  ),
+                  // TODO(story-2.5): Tags field slots in here at order 4.
                   const SizedBox(height: AppSpacing.md),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       FocusTraversalOrder(
-                        order: const NumericFocusOrder(4),
+                        order: const NumericFocusOrder(6),
                         child: TextButton(
                           onPressed: _cancel,
                           child: const Text('Cancel'),
@@ -164,7 +186,7 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
                       ),
                       const SizedBox(width: AppSpacing.sm),
                       FocusTraversalOrder(
-                        order: const NumericFocusOrder(3),
+                        order: const NumericFocusOrder(5),
                         child: FilledButton(
                           onPressed: _save,
                           child: const Text('Save'),

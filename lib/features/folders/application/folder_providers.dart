@@ -120,3 +120,40 @@ Set<String> collectFolderDescendants(
   }
   return result;
 }
+
+/// Pre-order traversal of the folder tree producing a depth-tagged flat list.
+/// Used by `FolderPicker` (Story 2.3) to render the full tree as a linear
+/// pickable list with depth-based indentation.
+///
+/// Roots come first (in the order [byParent] holds them, which is the repo's
+/// `createdAt asc`), each immediately followed by its descendants (recursively,
+/// also `createdAt asc`). Depth is 0 for roots, 1 for direct children, etc. --
+/// matches `_FolderSubtree`'s rendering depth so the picker mirrors the
+/// sidebar tree.
+///
+/// Iterative (stack) -- bounded even on a corrupted cyclic [byParent] map
+/// because the visited set prevents re-enqueuing the same id. Same rationale
+/// as [collectFolderDescendants].
+List<({Folder folder, int depth})> flattenFolderTree(
+  Map<String?, List<Folder>> byParent,
+) {
+  final result = <({Folder folder, int depth})>[];
+  final visited = <String>{};
+  final stack = <({Folder folder, int depth})>[];
+  final roots = byParent[null] ?? const <Folder>[];
+  // Push roots in REVERSE so the first root sits on top of the stack and
+  // emerges first via removeLast().
+  for (final root in roots.reversed) {
+    stack.add((folder: root, depth: 0));
+  }
+  while (stack.isNotEmpty) {
+    final frame = stack.removeLast();
+    if (!visited.add(frame.folder.id)) continue;
+    result.add(frame);
+    final children = byParent[frame.folder.id] ?? const <Folder>[];
+    for (final child in children.reversed) {
+      stack.add((folder: child, depth: frame.depth + 1));
+    }
+  }
+  return result;
+}

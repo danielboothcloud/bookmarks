@@ -155,6 +155,92 @@ void main() {
     });
   });
 
+  group('flattenFolderTree', () {
+    test('returns empty list when byParent is empty', () {
+      expect(flattenFolderTree(<String?, List<Folder>>{}), isEmpty);
+    });
+
+    test('returns single root when no children exist', () {
+      final root = _f('a', name: 'A');
+      final byParent = <String?, List<Folder>>{
+        null: [root],
+      };
+      final flat = flattenFolderTree(byParent);
+      expect(flat.length, 1);
+      expect(flat[0].folder.id, 'a');
+      expect(flat[0].depth, 0);
+    });
+
+    test('root + two children returns pre-order [root, c1, c2]', () {
+      final root = _f('a', name: 'A');
+      final c1 = _f('b', name: 'B', parentId: 'a');
+      final c2 = _f('c', name: 'C', parentId: 'a');
+      final byParent = <String?, List<Folder>>{
+        null: [root],
+        'a': [c1, c2],
+      };
+      final flat = flattenFolderTree(byParent);
+      expect(flat.map((e) => e.folder.id).toList(), ['a', 'b', 'c']);
+      expect(flat.map((e) => e.depth).toList(), [0, 1, 1]);
+    });
+
+    test('three-deep chain A -> B -> C is emitted in pre-order', () {
+      final byParent = <String?, List<Folder>>{
+        null: [_f('a', name: 'A')],
+        'a': [_f('b', name: 'B', parentId: 'a')],
+        'b': [_f('c', name: 'C', parentId: 'b')],
+      };
+      final flat = flattenFolderTree(byParent);
+      expect(flat.map((e) => e.folder.id).toList(), ['a', 'b', 'c']);
+      expect(flat.map((e) => e.depth).toList(), [0, 1, 2]);
+    });
+
+    test(
+        'two roots with mixed children: each root is followed by its own '
+        'descendants before the next root is emitted', () {
+      // Tree:
+      //   root1
+      //     childA
+      //     childB
+      //   root2
+      //     childC
+      final byParent = <String?, List<Folder>>{
+        null: [_f('root1'), _f('root2')],
+        'root1': [
+          _f('childA', parentId: 'root1'),
+          _f('childB', parentId: 'root1'),
+        ],
+        'root2': [_f('childC', parentId: 'root2')],
+      };
+      final flat = flattenFolderTree(byParent);
+      expect(flat.map((e) => e.folder.id).toList(),
+          ['root1', 'childA', 'childB', 'root2', 'childC']);
+      expect(flat.map((e) => e.depth).toList(), [0, 1, 1, 0, 1]);
+    });
+
+    test('cyclic byParent (a -> b -> a) terminates without duplicates', () {
+      final byParent = <String?, List<Folder>>{
+        null: [_f('a')],
+        'a': [_f('b', parentId: 'a')],
+        'b': [_f('a', parentId: 'b')], // cycle back to root
+      };
+      final flat = flattenFolderTree(byParent);
+      expect(flat.map((e) => e.folder.id).toList(), ['a', 'b']);
+    });
+
+    test('sibling order matches byParent list order (no internal sorting)', () {
+      // The repo emits createdAt asc; the function must NOT re-sort.
+      final byParent = <String?, List<Folder>>{
+        null: [
+          _f('z', name: 'Zeta', t: 100),
+          _f('a', name: 'Alpha', t: 200),
+        ],
+      };
+      final flat = flattenFolderTree(byParent);
+      expect(flat.map((e) => e.folder.id).toList(), ['z', 'a']);
+    });
+  });
+
   group('selectedFolderIdProvider', () {
     test('select sets state; clear resets to null', () {
       final container = ProviderContainer();
