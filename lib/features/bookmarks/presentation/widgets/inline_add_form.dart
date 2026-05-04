@@ -285,6 +285,9 @@ class _InlineFormTagsFieldState extends State<_InlineFormTagsField> {
       }
     }
     _controller.clear();
+    // Sticky focus -- match the detail-pane _TagsRow behaviour so the user
+    // can keep typing more tags without re-clicking the field.
+    _focusNode.requestFocus();
     if (changed) {
       widget.onChanged(List<String>.from(_tags));
       setState(() {});

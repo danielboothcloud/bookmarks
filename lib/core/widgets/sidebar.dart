@@ -224,7 +224,7 @@ class _SidebarItem {
   });
 }
 
-class _SidebarTile extends StatelessWidget {
+class _SidebarTile extends StatefulWidget {
   const _SidebarTile({
     required this.item,
     required this.isSelected,
@@ -238,43 +238,71 @@ class _SidebarTile extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
+  State<_SidebarTile> createState() => _SidebarTileState();
+}
+
+class _SidebarTileState extends State<_SidebarTile> {
+  // skipTraversal: this tile is reachable via mouse-click only (the AppShell's
+  // arrow-key sidebar navigation handles keyboard traversal of folder rows;
+  // navrail tiles aren't part of that traversal). The focus node exists solely
+  // to keep primary focus inside AppShell's Shortcuts subtree on mouse click,
+  // so Cmd+N / Esc remain reachable.
+  final _focusNode = FocusNode(
+    debugLabel: 'sidebar-tile',
+    skipTraversal: true,
+  );
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final color = isSelected ? AppColors.accent : AppColors.textSidebar;
+    final color =
+        widget.isSelected ? AppColors.accent : AppColors.textSidebar;
     return Semantics(
       button: true,
-      selected: isSelected,
-      label: item.label,
+      selected: widget.isSelected,
+      label: widget.item.label,
       child: InkWell(
-        onTap: onTap,
+        focusNode: _focusNode,
+        onTap: () {
+          _focusNode.requestFocus();
+          widget.onTap();
+        },
         child: Container(
           height: 44,
           padding: EdgeInsets.symmetric(
-            horizontal: collapsed ? 0 : AppSpacing.md,
+            horizontal: widget.collapsed ? 0 : AppSpacing.md,
           ),
           decoration: BoxDecoration(
             border: Border(
               left: BorderSide(
-                color: isSelected ? AppColors.accent : Colors.transparent,
+                color:
+                    widget.isSelected ? AppColors.accent : Colors.transparent,
                 width: 3,
               ),
             ),
           ),
           child: Row(
-            mainAxisAlignment: collapsed
+            mainAxisAlignment: widget.collapsed
                 ? MainAxisAlignment.center
                 : MainAxisAlignment.start,
             children: [
-              Icon(item.icon, color: color, size: 20),
-              if (!collapsed) ...[
+              Icon(widget.item.icon, color: color, size: 20),
+              if (!widget.collapsed) ...[
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
-                    item.label,
+                    widget.item.label,
                     style: TextStyle(
                       fontSize: 13,
                       color: color,
-                      fontWeight:
-                          isSelected ? FontWeight.w500 : FontWeight.w400,
+                      fontWeight: widget.isSelected
+                          ? FontWeight.w500
+                          : FontWeight.w400,
                     ),
                   ),
                 ),

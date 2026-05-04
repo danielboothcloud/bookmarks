@@ -16,9 +16,28 @@ import '../../domain/bookmark.dart';
 /// "grid mode" toggle on BookmarkListItem) per architecture line 519 -- the
 /// vertical-stack vs horizontal-row geometry difference is large enough that
 /// a single-widget mode would balloon into conditional layout.
-class BookmarkCard extends ConsumerWidget {
+class BookmarkCard extends ConsumerStatefulWidget {
   const BookmarkCard({required this.bookmark, super.key});
   final Bookmark bookmark;
+
+  @override
+  ConsumerState<BookmarkCard> createState() => _BookmarkCardState();
+}
+
+class _BookmarkCardState extends ConsumerState<BookmarkCard> {
+  // skipTraversal: card-grid keyboard nav isn't wired; this node exists solely
+  // to keep primary focus inside AppShell's Shortcuts subtree on mouse click,
+  // so Cmd+N / Esc remain reachable. Tab order is unaffected.
+  final _focusNode = FocusNode(
+    debugLabel: 'bookmark-card',
+    skipTraversal: true,
+  );
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
 
   String _domain(String url) {
     final host = Uri.tryParse(url)?.host;
@@ -26,7 +45,8 @@ class BookmarkCard extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
+    final bookmark = widget.bookmark;
     final textTheme = Theme.of(context).textTheme;
     final selectedId = ref.watch(selectedBookmarkIdProvider);
     final isSelected = selectedId == bookmark.id;
@@ -47,10 +67,14 @@ class BookmarkCard extends ConsumerWidget {
               borderRadius: BorderRadius.circular(6),
             ),
             child: InkWell(
+              focusNode: _focusNode,
               borderRadius: BorderRadius.circular(6),
-              onTap: () => ref
-                  .read(selectedBookmarkIdProvider.notifier)
-                  .select(bookmark.id),
+              onTap: () {
+                _focusNode.requestFocus();
+                ref
+                    .read(selectedBookmarkIdProvider.notifier)
+                    .select(bookmark.id);
+              },
               child: Padding(
                 padding: const EdgeInsets.all(AppSpacing.md),
                 child: Column(

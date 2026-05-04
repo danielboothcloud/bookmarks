@@ -17,7 +17,7 @@ import '../../domain/bookmark.dart';
 // confirmation. Story 1.5's keyboard Delete shortcut lives at app_shell.dart
 // (works regardless of focus, as long as a bookmark is selected).
 
-class BookmarkListItem extends ConsumerWidget {
+class BookmarkListItem extends ConsumerStatefulWidget {
   const BookmarkListItem({
     required this.bookmark,
     super.key,
@@ -25,13 +25,34 @@ class BookmarkListItem extends ConsumerWidget {
 
   final Bookmark bookmark;
 
+  @override
+  ConsumerState<BookmarkListItem> createState() => _BookmarkListItemState();
+}
+
+class _BookmarkListItemState extends ConsumerState<BookmarkListItem> {
+  // skipTraversal: keyboard list nav (deferred Story; today the user opens
+  // bookmarks via mouse + arrow-on-detail-pane). The node exists solely so a
+  // mouse click claims focus inside AppShell's Shortcuts subtree -- without
+  // it primary focus drifts outside, and Cmd+N / Esc bonk.
+  final _focusNode = FocusNode(
+    debugLabel: 'bookmark-list-item',
+    skipTraversal: true,
+  );
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
   String _domain(String url) {
     final host = Uri.tryParse(url)?.host;
     return (host != null && host.isNotEmpty) ? host : url;
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
+    final bookmark = widget.bookmark;
     final textTheme = Theme.of(context).textTheme;
     final selectedId = ref.watch(selectedBookmarkIdProvider);
     final isSelected = selectedId == bookmark.id;
@@ -46,9 +67,13 @@ class BookmarkListItem extends ConsumerWidget {
           child: Material(
             color: isSelected ? AppColors.surfaceHover : Colors.transparent,
             child: InkWell(
-              onTap: () => ref
-                  .read(selectedBookmarkIdProvider.notifier)
-                  .select(bookmark.id),
+              focusNode: _focusNode,
+              onTap: () {
+                _focusNode.requestFocus();
+                ref
+                    .read(selectedBookmarkIdProvider.notifier)
+                    .select(bookmark.id);
+              },
               hoverColor: AppColors.surfaceHover,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(minHeight: 48),

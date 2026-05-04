@@ -314,6 +314,13 @@ class FolderRow extends ConsumerStatefulWidget {
 class _FolderRowState extends ConsumerState<FolderRow> {
   late final TextEditingController _controller;
   late final FocusNode _focusNode;
+  // Distinct from [_focusNode] (which belongs to the rename TextField). This
+  // node is held by the row's InkWell and exists solely so a mouse click on
+  // the row claims focus inside AppShell's Shortcuts subtree -- without it,
+  // primary focus drifts outside the subtree and Cmd+N / Esc bonk.
+  // skipTraversal: keyboard sidebar nav is driven by the AppShell's arrow-key
+  // intents; Tab should not stop on every folder row.
+  late final FocusNode _rowFocusNode;
   bool _wasEditing = false;
 
   @override
@@ -321,12 +328,17 @@ class _FolderRowState extends ConsumerState<FolderRow> {
     super.initState();
     _controller = TextEditingController(text: widget.folder.name);
     _focusNode = FocusNode(debugLabel: 'folder-row-${widget.folder.id}');
+    _rowFocusNode = FocusNode(
+      debugLabel: 'folder-row-tap-${widget.folder.id}',
+      skipTraversal: true,
+    );
   }
 
   @override
   void dispose() {
     _controller.dispose();
     _focusNode.dispose();
+    _rowFocusNode.dispose();
     super.dispose();
   }
 
@@ -408,7 +420,12 @@ class _FolderRowState extends ConsumerState<FolderRow> {
           .start(widget.folder.id),
       // TODO(post-2.2): right-click context menu for Rename/Delete/Move-to.
       child: InkWell(
+        focusNode: _rowFocusNode,
         onTap: () {
+          // Claim focus inside AppShell's Shortcuts subtree so Cmd+N / Esc
+          // remain reachable after a row click. skipTraversal on _rowFocusNode
+          // keeps Tab order unchanged.
+          _rowFocusNode.requestFocus();
           // Navigate to the Folders branch of the StatefulShellRoute. The
           // navrail will reflect the active branch automatically.
           final shell = StatefulNavigationShell.maybeOf(context);
@@ -442,9 +459,15 @@ class _FolderRowState extends ConsumerState<FolderRow> {
             depth: widget.depth,
             hasChildren: widget.hasChildren,
             isExpanded: widget.isExpanded,
-            onChevronTap: () => ref
-                .read(expandedFolderIdsProvider.notifier)
-                .toggle(widget.folder.id),
+            onChevronTap: () {
+              // Same focus-claim rationale as the row InkWell -- the chevron's
+              // opaque GestureDetector consumes the tap before it reaches the
+              // wrapping InkWell, so we have to claim focus here too.
+              _rowFocusNode.requestFocus();
+              ref
+                  .read(expandedFolderIdsProvider.notifier)
+                  .toggle(widget.folder.id);
+            },
             child: Text(
               widget.folder.name,
               maxLines: 1,
