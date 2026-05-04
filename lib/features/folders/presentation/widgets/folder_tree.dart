@@ -510,6 +510,12 @@ class _FolderRowState extends ConsumerState<FolderRow> {
               // text to the on-disk name so the next edit starts clean.
               _controller.text = widget.folder.name;
               ref.read(pendingFolderEditIdProvider.notifier).clear();
+              // Same focus handoff as _commit -- the rename TextField is about
+              // to be detached; pass focus to the row's focus node so it
+              // stays inside AppShell's Shortcuts subtree.
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _rowFocusNode.requestFocus();
+              });
               return null;
             },
           ),
@@ -559,6 +565,14 @@ class _FolderRowState extends ConsumerState<FolderRow> {
     ref
         .read(folderNotifierProvider.notifier)
         .renameFolder(widget.folder.id, value);
+    // Hand focus from the rename TextField back to the row's focus node. The
+    // TextField's FocusNode is about to be detached as the row rebuilds with
+    // isEditing=false; without an explicit handoff, primary focus drifts
+    // outside the AppShell Shortcuts subtree and Cmd+N / Esc bonk on the next
+    // keystroke. Same focus-claim rationale as the row InkWell's onTap.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _rowFocusNode.requestFocus();
+    });
   }
 }
 

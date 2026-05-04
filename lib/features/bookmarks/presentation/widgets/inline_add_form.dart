@@ -40,6 +40,15 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
     // tap (Story 2.2), so a non-null value reliably means "user is currently
     // viewing this folder" -- the right intent signal for the new bookmark.
     _pendingFolderId = ref.read(selectedFolderIdProvider);
+    // The URL field's autofocus: true only fires when no widget currently
+    // has focus. If Cmd+N is invoked while focus is already on a TextField
+    // (e.g. the detail-pane title/URL/notes/tags input), autofocus is a
+    // no-op and the form opens with stale focus on the prior field. Force
+    // focus to the URL field on the next frame so the user can paste a URL
+    // immediately regardless of where they were when they invoked Cmd+N.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _urlFocusNode.requestFocus();
+    });
   }
 
   @override
