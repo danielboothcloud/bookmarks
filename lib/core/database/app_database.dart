@@ -28,12 +28,11 @@ class AppDatabase extends _$AppDatabase {
         onCreate: (m) async {
           await m.createAll();
           // Drift's @TableIndex generator (as of drift ^2.32) does not emit
-          // functional `lower(...)` UNIQUE indexes. m.createAll() built the
-          // placeholder column index from the @TableIndex annotation on
-          // Tags; replace it with the functional UNIQUE index so a fresh-
-          // create at v4 enforces case-insensitive name dedup at the SQL
-          // layer (matching the v1->v4 / v2->v4 / v3->v4 upgrade paths).
-          await customStatement('DROP INDEX IF EXISTS idx_tags_lower_name');
+          // functional `lower(...)` UNIQUE indexes, so the Tags table has no
+          // @TableIndex for this name and m.createAll() does not create it.
+          // Install the functional UNIQUE index manually so a fresh v4 create
+          // enforces case-insensitive name dedup at the SQL layer (matching
+          // the v3->v4 upgrade path in onUpgrade).
           await customStatement(
             'CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_lower_name '
             'ON tags (lower(name))',

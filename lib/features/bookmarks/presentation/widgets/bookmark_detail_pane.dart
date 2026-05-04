@@ -374,10 +374,16 @@ class _PopulatedBody extends StatelessWidget {
               // Tags row (Story 2.5). Slots between Folder (3) and Notes (5)
               // per the UX-spec form-field order URL -> Title -> Folder ->
               // Tags -> Notes. Notes/Open renumbered from 4/5 to 5/6 to make
-              // room.
+              // room. ValueKey forces a fresh _TagsRowState (and a fresh
+              // TextEditingController) when the selected bookmark changes,
+              // so an uncommitted draft from bookmark A never bleeds into B.
               FocusTraversalOrder(
                 order: const NumericFocusOrder(4),
-                child: _TagsRow(bookmarkId: bookmark.id, editable: true),
+                child: _TagsRow(
+                  key: ValueKey(bookmark.id),
+                  bookmarkId: bookmark.id,
+                  editable: true,
+                ),
               ),
               const SizedBox(height: AppSpacing.md),
               FocusTraversalOrder(
@@ -557,6 +563,7 @@ class _DeleteConfirmationState extends State<_DeleteConfirmation> {
 /// `features/tags/presentation/widgets/bookmark_tag_chip_row.dart`.
 class _TagsRow extends ConsumerStatefulWidget {
   const _TagsRow({
+    super.key,
     required this.bookmarkId,
     required this.editable,
   });
@@ -570,7 +577,26 @@ class _TagsRow extends ConsumerStatefulWidget {
 
 class _TagsRowState extends ConsumerState<_TagsRow> {
   final _controller = TextEditingController();
-  final _focusNode = FocusNode(debugLabel: 'detail-tags-input');
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode(
+      debugLabel: 'detail-tags-input',
+      // Intercept Tab before focus traversal fires so it commits the
+      // in-progress tag (AC1: Enter OR comma OR Tab all confirm).
+      // Return ignored so Tab then moves focus to the next field naturally.
+      onKeyEvent: (_, event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.tab) {
+          _commit(refocus: false);
+          return KeyEventResult.ignored;
+        }
+        return KeyEventResult.ignored;
+      },
+    );
+  }
 
   @override
   void dispose() {
@@ -579,7 +605,7 @@ class _TagsRowState extends ConsumerState<_TagsRow> {
     super.dispose();
   }
 
-  void _commit() {
+  void _commit({bool refocus = true}) {
     final raw = _controller.text;
     // Comma-separated batch entry: "design, ux, typography" creates three tags
     // in one Enter-press. Mirrors the chip-input idiom from Slack / Notion /
@@ -603,7 +629,8 @@ class _TagsRowState extends ConsumerState<_TagsRow> {
     }
     _controller.clear();
     // Sticky focus -- user stays in "adding tags" mode without re-clicking.
-    _focusNode.requestFocus();
+    // Tab commit passes refocus:false so normal traversal proceeds instead.
+    if (refocus) _focusNode.requestFocus();
   }
 
   @override

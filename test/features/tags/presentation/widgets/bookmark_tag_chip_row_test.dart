@@ -162,6 +162,36 @@ void main() {
     await repo.dispose();
   });
 
+  testWidgets(
+      'overflow: "+N" badge appears when chips cannot all fit in the row',
+      (tester) async {
+    final repo = _StreamingTagRepo();
+    // 5 tags with 20-char names. Heuristic: _chipWidth = 12 + 20*7 = 152px.
+    // First chip (152px) + overflow reserve (4 + 26 = 30px) = 182 ≤ 300 → fits.
+    // Second chip check: 152 + 4 + 152 + 30 = 338 > 300 → break.
+    // Result: 1 visible chip + "+4" badge.
+    repo.emit('b1', [
+      _tag('average-long-name-00'),
+      _tag('average-long-name-01'),
+      _tag('average-long-name-02'),
+      _tag('average-long-name-03'),
+      _tag('average-long-name-04'),
+    ]);
+    await tester.pumpWidget(_wrap(repo, 'b1'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('average-long-name-00'), findsOneWidget);
+    expect(find.text('average-long-name-04'), findsNothing);
+    expect(
+      find.byWidgetPredicate(
+        (w) => w is Text && (w.data?.startsWith('+') ?? false),
+      ),
+      findsOneWidget,
+    );
+
+    await repo.dispose();
+  });
+
   testWidgets('stream update: 0 -> 1 chip appears via the family stream',
       (tester) async {
     final repo = _StreamingTagRepo();

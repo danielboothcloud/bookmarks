@@ -147,10 +147,18 @@ void main() {
     final xId = (xRes as Ok<Tag, AppError>).value.id;
     final aId = (aRes as Ok<Tag, AppError>).value.id;
 
-    // Link X first, then A — chip order should be [X, A] not alpha [A, X].
-    await repo.linkBookmarkTag('b1', xId);
-    await Future<void>.delayed(const Duration(milliseconds: 5));
-    await repo.linkBookmarkTag('b1', aId);
+    // Insert junction rows with explicit created_at values instead of relying
+    // on wall-clock timing (which is fragile on fast CI machines where both
+    // inserts can land in the same millisecond).
+    // X at t=1, A at t=2 → chip order should be [X, A], not alpha [A, X].
+    await db.customStatement(
+      'INSERT INTO bookmark_tags (bookmark_id, tag_id, created_at) '
+      "VALUES ('b1', '$xId', 1)",
+    );
+    await db.customStatement(
+      'INSERT INTO bookmark_tags (bookmark_id, tag_id, created_at) '
+      "VALUES ('b1', '$aId', 2)",
+    );
 
     final list = await repo.watchForBookmark('b1').first;
     expect(list.map((t) => t.name).toList(), ['X', 'A']);

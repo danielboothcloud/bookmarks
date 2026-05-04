@@ -28,26 +28,7 @@ final watchTagsForBookmarkProvider =
   return ref.watch(tagRepositoryProvider).watchForBookmark(bookmarkId);
 });
 
-/// Holds the current text in the BookmarkDetailPane's tag input for the
-/// CURRENTLY-SELECTED bookmark. Form-local state stored in a Notifier rather
-/// than `StatefulWidget._textController` because:
-///   1. The detail pane is reused for whichever bookmark is selected;
-///      switching selection should clear the input draft (selecting bookmark
-///      B should not inherit the half-typed tag from bookmark A). A
-///      provider-driven controller seeded by the bookmark id makes this
-///      explicit.
-///   2. Tests can drive the input without hooking into the widget's internal
-///      TextEditingController.
-/// Unrelated to the InlineAddForm's pending tags -- THAT list lives in the
-/// form's own State (it's discarded on Esc/Save without ever touching this
-/// provider).
-class TagInputDraftNotifier extends Notifier<String> {
-  @override
-  String build() => '';
-
-  void update(String next) => state = next;
-  void clear() => state = '';
-}
-
-final tagInputDraftProvider =
-    NotifierProvider<TagInputDraftNotifier, String>(TagInputDraftNotifier.new);
+// Note: tagInputDraftProvider was removed in the 2.5 code review. The draft
+// clearing on bookmark selection change is handled by ValueKey(bookmarkId) on
+// _TagsRow, which forces a fresh ConsumerState (and a fresh
+// TextEditingController) whenever the selected bookmark changes.

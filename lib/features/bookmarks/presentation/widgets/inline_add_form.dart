@@ -264,7 +264,25 @@ class _InlineFormTagsField extends StatefulWidget {
 class _InlineFormTagsFieldState extends State<_InlineFormTagsField> {
   late final List<String> _tags = List<String>.from(widget.initialTags);
   final _controller = TextEditingController();
-  final _focusNode = FocusNode(debugLabel: 'inline-add-tags');
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode(
+      debugLabel: 'inline-add-tags',
+      // Tab commits the in-progress tag (AC1: Enter OR comma OR Tab confirm)
+      // and then lets normal traversal move focus to the next field.
+      onKeyEvent: (_, event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.tab) {
+          _commit(refocus: false);
+          return KeyEventResult.ignored;
+        }
+        return KeyEventResult.ignored;
+      },
+    );
+  }
 
   @override
   void dispose() {
@@ -273,7 +291,7 @@ class _InlineFormTagsFieldState extends State<_InlineFormTagsField> {
     super.dispose();
   }
 
-  void _commit() {
+  void _commit({bool refocus = true}) {
     final raw = _controller.text;
     final parts = raw
         .split(',')
@@ -296,7 +314,8 @@ class _InlineFormTagsFieldState extends State<_InlineFormTagsField> {
     _controller.clear();
     // Sticky focus -- match the detail-pane _TagsRow behaviour so the user
     // can keep typing more tags without re-clicking the field.
-    _focusNode.requestFocus();
+    // Tab commit passes refocus:false so normal traversal proceeds instead.
+    if (refocus) _focusNode.requestFocus();
     if (changed) {
       widget.onChanged(List<String>.from(_tags));
       setState(() {});

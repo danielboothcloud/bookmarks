@@ -62,22 +62,9 @@ class _StreamingTagRepository implements ITagRepository {
 }
 
 void main() {
-  test('tagInputDraftProvider default state is ""', () {
-    final container = ProviderContainer();
-    addTearDown(container.dispose);
-    expect(container.read(tagInputDraftProvider), '');
-  });
-
-  test('tagInputDraftProvider update("flu") then clear()', () {
-    final container = ProviderContainer();
-    addTearDown(container.dispose);
-
-    container.read(tagInputDraftProvider.notifier).update('flu');
-    expect(container.read(tagInputDraftProvider), 'flu');
-
-    container.read(tagInputDraftProvider.notifier).clear();
-    expect(container.read(tagInputDraftProvider), '');
-  });
+  // tagInputDraftProvider was removed in the 2.5 code review (dead code:
+  // _TagsRow never wired to it; draft clearing is now handled by
+  // ValueKey(bookmarkId) forcing fresh ConsumerState on bookmark switch).
 
   test('watchAllTagsProvider stream forwards values from the repo', () async {
     final repo = _StreamingTagRepository();
