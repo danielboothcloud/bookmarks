@@ -405,9 +405,15 @@ class _FolderRowState extends ConsumerState<FolderRow> {
       feedback: _DragFeedback(name: widget.folder.name),
       childWhenDragging: Opacity(
         opacity: 0.4,
+        // childWhenDragging deliberately does NOT wrap in
+        // _FolderContextMenu -- the row is mid-drag, no menu makes sense.
         child: _buildDisplayRowBody(context, isHoverTarget),
       ),
-      child: _buildDisplayRowBody(context, isHoverTarget),
+      child: _FolderContextMenu(
+        folder: widget.folder,
+        rowFocusNode: _rowFocusNode,
+        child: _buildDisplayRowBody(context, isHoverTarget),
+      ),
     );
   }
 
@@ -418,7 +424,8 @@ class _FolderRowState extends ConsumerState<FolderRow> {
       onDoubleTap: () => ref
           .read(pendingFolderEditIdProvider.notifier)
           .start(widget.folder.id),
-      // TODO(post-2.2): right-click context menu for Rename/Delete/Move-to.
+      // Right-click context menu: see _FolderContextMenu wrapper above the
+      // GestureDetector chain -- wraps Rename / New subfolder / Delete dispatch.
       child: InkWell(
         focusNode: _rowFocusNode,
         onTap: () {
@@ -686,6 +693,104 @@ class _DragFeedback extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Wraps a [FolderRow]'s display body in a [MenuAnchor] so right-click opens a
+/// Rename / New subfolder / Delete context menu at the cursor's local position.
+///
+/// Stateful because the [MenuController] must persist across the rebuild that
+/// happens when the menu opens -- a fresh controller per build would lose its
+/// open/closed state and the menu would leak open. Same controller-ownership
+/// pattern as `FolderPicker` (Material 3 `MenuAnchor` standard usage).
+///
+/// [MenuAnchor] (Material 3) over `PopupMenuButton` (Material 2): the codebase
+/// already standardised on `MenuAnchor` for menu surfaces; `PopupMenuButton`
+/// hard-codes a button anchor (the three-dots icon) and we need a positional,
+/// cursor-anchored menu without a visible trigger.
+class _FolderContextMenu extends ConsumerStatefulWidget {
+  const _FolderContextMenu({
+    required this.folder,
+    required this.rowFocusNode,
+    required this.child,
+  });
+
+  final Folder folder;
+  final FocusNode rowFocusNode;
+  final Widget child;
+
+  @override
+  ConsumerState<_FolderContextMenu> createState() => _FolderContextMenuState();
+}
+
+class _FolderContextMenuState extends ConsumerState<_FolderContextMenu> {
+  // Owned here so the GestureDetector's onSecondaryTapDown can call
+  // controller.open(position: ...) with the cursor's local coordinates --
+  // MenuAnchor.builder hands a controller down too, but we need it accessible
+  // from the GestureDetector that wraps the menu's anchor child.
+  // MenuController has no explicit dispose surface in current Flutter; the
+  // anchored MenuAnchor manages listener subscriptions internally.
+  final _menuController = MenuController();
+
+  @override
+  Widget build(BuildContext context) {
+    return MenuAnchor(
+      controller: _menuController,
+      menuChildren: <Widget>[
+        MenuItemButton(
+          onPressed: () => ref
+              .read(pendingFolderEditIdProvider.notifier)
+              .start(widget.folder.id),
+          child: const Text('Rename'),
+        ),
+        MenuItemButton(
+          onPressed: () async {
+            // Mirrors the sidebar `+` selection-aware-create handler at
+            // sidebar.dart line 128-146, except the parent is the
+            // closure-captured folder (not selectedFolderIdProvider) -- the
+            // user right-clicked THIS folder, so THIS folder is the parent.
+            // FolderNotifier.addFolder auto-expands the parent on success so
+            // the new child row is immediately visible.
+            final newId = await ref
+                .read(folderNotifierProvider.notifier)
+                .addFolder(parentId: widget.folder.id);
+            if (newId != null) {
+              ref
+                  .read(pendingFolderEditIdProvider.notifier)
+                  .start(newId);
+            }
+          },
+          child: const Text('New subfolder'),
+        ),
+        // Visual separator between constructive and destructive actions --
+        // mirrors the standard desktop-menu pattern.
+        const Divider(height: 1),
+        MenuItemButton(
+          onPressed: () => ref
+              .read(pendingFolderDeleteIdProvider.notifier)
+              .prompt(widget.folder.id),
+          child: const Text('Delete'),
+        ),
+      ],
+      child: GestureDetector(
+        // Opaque so the secondary tap is not absorbed by the InkWell child --
+        // Material's InkWell does not handle secondary buttons and would
+        // otherwise eat the gesture, leaving the menu unreachable.
+        behavior: HitTestBehavior.opaque,
+        onSecondaryTapDown: (details) {
+          // Claim focus first so Esc / Cmd+N stay routed to AppShell's
+          // Shortcuts subtree once the menu closes -- mirrors the focus-claim
+          // discipline at _buildDisplayRowBody onTap.
+          widget.rowFocusNode.requestFocus();
+          if (_menuController.isOpen) {
+            _menuController.close();
+          } else {
+            _menuController.open(position: details.localPosition);
+          }
+        },
+        child: widget.child,
       ),
     );
   }

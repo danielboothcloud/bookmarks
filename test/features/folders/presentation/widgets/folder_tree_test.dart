@@ -153,23 +153,53 @@ void main() {
     expect(tf.controller!.selection.extentOffset, 'Personal'.length);
   });
 
-  testWidgets('Double-tap on folder name enters edit mode', (tester) async {
+  testWidgets(
+      'Double-tap on folder name enters edit mode; secondary-tap on a '
+      'sibling folder coexists (Story 2.7 regression check)', (tester) async {
     final s = _setup();
 
     await tester.pumpWidget(_wrap(s.container));
-    s.stream.add([_f('a', name: 'Personal')]);
+    s.stream.add([
+      _f('a', name: 'Personal', createdAt: 1000),
+      _f('b', name: 'Work', createdAt: 2000),
+    ]);
     await tester.pump();
 
     expect(s.container.read(pendingFolderEditIdProvider), isNull);
 
-    final detector = tester.widget<GestureDetector>(
-      find.byWidgetPredicate(
-          (w) => w is GestureDetector && w.onDoubleTap != null),
-    );
-    detector.onDoubleTap!();
+    // Double-tap detector for folder 'a' -- the existing rename-trigger path.
+    final doubleTapDetector = tester
+        .widgetList<GestureDetector>(
+          find.byWidgetPredicate(
+              (w) => w is GestureDetector && w.onDoubleTap != null),
+        )
+        .first;
+    doubleTapDetector.onDoubleTap!();
     await tester.pump();
 
-    expect(s.container.read(pendingFolderEditIdProvider), 'a');
+    expect(s.container.read(pendingFolderEditIdProvider), 'a',
+        reason: 'double-tap rename trigger still fires');
+
+    // Now exercise the Story 2.7 secondary-tap path on folder 'b' -- the new
+    // _FolderContextMenu wrapper must not interfere with the existing
+    // double-tap handler.
+    final secondaryDetector = tester.widget<GestureDetector>(
+      find
+          .ancestor(
+            of: find.text('Work'),
+            matching: find.byWidgetPredicate(
+              (w) => w is GestureDetector && w.onSecondaryTapDown != null,
+            ),
+          )
+          .first,
+    );
+    secondaryDetector.onSecondaryTapDown!(
+      TapDownDetails(localPosition: const Offset(40, 8)),
+    );
+    await tester.pump();
+
+    expect(find.widgetWithText(MenuItemButton, 'Rename'), findsOneWidget,
+        reason: 'secondary-tap opens the new context menu in parallel');
   });
 
   testWidgets(
