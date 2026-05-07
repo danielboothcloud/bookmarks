@@ -198,6 +198,78 @@ void main() {
       expect((await db.select(db.bookmarks).get()), isEmpty);
     });
 
+    test(
+        'cascade-cleans bookmark_tags junction rows for the deleted '
+        'bookmarks (no orphan junctions left behind)', () async {
+      // The folder cascade hard-deletes bookmarks. Without explicit junction
+      // cleanup those bookmarks' tag links would orphan -- inflating the
+      // sidebar tag count. Architectural decision matches
+      // BookmarkRepository.delete: maintain referential integrity at the
+      // application layer in lieu of FKs.
+      await repository.save(make(id: 'a'));
+      await insertBookmark(id: 'b-1', folderId: 'a');
+      await insertBookmark(id: 'b-2', folderId: 'a');
+      await insertBookmark(id: 'unrelated');
+      Future<void> insertJunction(String bookmarkId, String tagId) =>
+          db.into(db.bookmarkTags).insert(
+                BookmarkTagsCompanion(
+                  bookmarkId: Value(bookmarkId),
+                  tagId: Value(tagId),
+                  createdAt: const Value(0),
+                ),
+              );
+      await insertJunction('b-1', 't1');
+      await insertJunction('b-2', 't1');
+      await insertJunction('unrelated', 't2');
+
+      await repository.deleteCascade({'a'});
+
+      final remaining = await db.select(db.bookmarkTags).get();
+      expect(remaining.map((r) => r.bookmarkId).toList(), ['unrelated'],
+          reason:
+              'junctions for cascade-deleted bookmarks must be cleaned; '
+              'junctions for unrelated bookmarks survive');
+    });
+
+    test(
+        'cascade also hard-deletes tag rows whose last junction was just '
+        'removed (revised FR16, v5)', () async {
+      await repository.save(make(id: 'a'));
+      await insertBookmark(id: 'b-1', folderId: 'a');
+      await insertBookmark(id: 'unrelated');
+      // Seed two tags: one only linked to b-1 (will be cleaned), one linked
+      // to the unrelated bookmark (must survive).
+      Future<void> insertTag(String id, String name) =>
+          db.into(db.tags).insert(
+                TagsCompanion(
+                  id: Value(id),
+                  name: Value(name),
+                  createdAt: const Value(0),
+                  updatedAt: const Value(0),
+                ),
+              );
+      await insertTag('t-doomed', 'doomed');
+      await insertTag('t-survivor', 'survivor');
+      Future<void> insertJunction(String bookmarkId, String tagId) =>
+          db.into(db.bookmarkTags).insert(
+                BookmarkTagsCompanion(
+                  bookmarkId: Value(bookmarkId),
+                  tagId: Value(tagId),
+                  createdAt: const Value(0),
+                ),
+              );
+      await insertJunction('b-1', 't-doomed');
+      await insertJunction('unrelated', 't-survivor');
+
+      await repository.deleteCascade({'a'});
+
+      final tags = await db.select(db.tags).get();
+      expect(tags.map((t) => t.id).toList(), ['t-survivor'],
+          reason:
+              'cascade hard-deletes tags whose last junction was removed; '
+              'tags still linked to surviving bookmarks remain');
+    });
+
     test('bookmarks in folders OUTSIDE the descendant set are preserved',
         () async {
       await repository.save(make(id: 'a'));

@@ -3,6 +3,7 @@ import 'package:bookmarks/core/error/app_error.dart';
 import 'package:bookmarks/core/error/result.dart';
 import 'package:bookmarks/features/tags/data/tag_repository.dart';
 import 'package:bookmarks/features/tags/domain/tag.dart';
+import 'package:bookmarks/features/tags/domain/tag_with_count.dart';
 import 'package:drift/drift.dart' show Value, Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -120,14 +121,39 @@ void main() {
         reason: 'idempotent: removing-something-already-gone is success');
   });
 
-  test('unlinkBookmarkTag does NOT delete the Tag row (FR16: count=0 survives)',
-      () async {
+  test(
+      'unlinkBookmarkTag DELETES the Tag row when its last junction is gone '
+      '(revised FR16, v5: no count=0 orphan tags)', () async {
     final upsert = await repo.upsertByName('Flutter');
     final tagId = (upsert as Ok<Tag, AppError>).value.id;
     await repo.linkBookmarkTag('b1', tagId);
+
+    final beforeUnlink = await tagCount();
+    expect(beforeUnlink, 1);
+
     await repo.unlinkBookmarkTag('b1', tagId);
 
-    expect(await tagCount(), 1, reason: 'tag survives its last bookmark');
+    expect(await tagCount(), 0,
+        reason:
+            'revised FR16 (v5): tag is hard-deleted when its last junction '
+            'is removed -- avoids "0 (orphan)" rows in the sidebar');
+  });
+
+  test(
+      'unlinkBookmarkTag preserves the Tag row when OTHER bookmarks still '
+      'reference it (only the last-junction case removes the tag)', () async {
+    final upsert = await repo.upsertByName('Flutter');
+    final tagId = (upsert as Ok<Tag, AppError>).value.id;
+    await repo.linkBookmarkTag('b1', tagId);
+    await repo.linkBookmarkTag('b2', tagId);
+
+    await repo.unlinkBookmarkTag('b1', tagId);
+
+    expect(await tagCount(), 1,
+        reason:
+            'tag still has a junction (b2 -> tag); only the last-junction '
+            'case triggers tag removal');
+    expect(await junctionCount(), 1);
   });
 
   test('watchAll emits new tags ordered alphabetically (case-insensitive)',
@@ -279,5 +305,113 @@ void main() {
     final found = await repo.getById('t-1');
     expect(found, isA<Ok<Tag, AppError>>());
     expect((found as Ok<Tag, AppError>).value.name, 'manual');
+  });
+
+  group('watchAllWithCounts', () {
+    test('emits empty list when no tags exist', () async {
+      final list = await repo.watchAllWithCounts().first;
+      expect(list, isEmpty);
+    });
+
+    test('emits tags alphabetically (case-insensitive)', () async {
+      await repo.upsertByName('flutter');
+      await repo.upsertByName('Bookmarks');
+      await repo.upsertByName('apple');
+
+      final list = await repo.watchAllWithCounts().first;
+      expect(
+        list.map((twc) => twc.tag.name).toList(),
+        ['apple', 'Bookmarks', 'flutter'],
+      );
+    });
+
+    test('count = 0 for tags with no junctions (FR16)', () async {
+      await repo.upsertByName('Lonely');
+
+      final list = await repo.watchAllWithCounts().first;
+      expect(list.single.tag.name, 'Lonely');
+      expect(list.single.count, 0);
+    });
+
+    test('count reflects junction multiplicity', () async {
+      final upsert = await repo.upsertByName('Flutter');
+      final tagId = (upsert as Ok<Tag, AppError>).value.id;
+      await repo.linkBookmarkTag('b1', tagId);
+      await repo.linkBookmarkTag('b2', tagId);
+      await repo.linkBookmarkTag('b3', tagId);
+
+      final list = await repo.watchAllWithCounts().first;
+      expect(list.single.count, 3);
+    });
+
+    test('re-emits on bookmark_tags insert', () async {
+      final upsert = await repo.upsertByName('Flutter');
+      final tagId = (upsert as Ok<Tag, AppError>).value.id;
+
+      final emissions = <List<TagWithCount>>[];
+      final sub = repo.watchAllWithCounts().listen(emissions.add);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      await repo.linkBookmarkTag('b1', tagId);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(emissions.last.single.count, 1);
+      await sub.cancel();
+    });
+
+    test('re-emits on bookmark_tags delete', () async {
+      final upsert = await repo.upsertByName('Flutter');
+      final tagId = (upsert as Ok<Tag, AppError>).value.id;
+      await repo.linkBookmarkTag('b1', tagId);
+      await repo.linkBookmarkTag('b2', tagId);
+
+      final emissions = <List<TagWithCount>>[];
+      final sub = repo.watchAllWithCounts().listen(emissions.add);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      await repo.unlinkBookmarkTag('b1', tagId);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(emissions.last.single.count, 1);
+      await sub.cancel();
+    });
+
+    test('re-emits on tag insert and re-orders alphabetically', () async {
+      await repo.upsertByName('zebra');
+
+      final emissions = <List<TagWithCount>>[];
+      final sub = repo.watchAllWithCounts().listen(emissions.add);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      await repo.upsertByName('apple');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(
+        emissions.last.map((twc) => twc.tag.name).toList(),
+        ['apple', 'zebra'],
+      );
+      await sub.cancel();
+    });
+
+    test(
+        'count query still counts an orphan junction inserted out-of-band '
+        '(raw SQL bypasses BookmarkRepository.delete cascade) -- documents '
+        'that the count semantics deliberately do NOT join on bookmarks',
+        () async {
+      // The query joins on tag_id only, not on bookmarks.id. The normal
+      // bookmark-delete path (BookmarkRepository.delete) cascade-cleans
+      // junctions in a transaction, so users never observe the inflated
+      // count. But a future sync-merge path (Story 4.3) may receive a tag
+      // unlink without the corresponding bookmark write, briefly leaving an
+      // orphan -- this test asserts the count includes that orphan, so the
+      // sync-merge code knows it must clean orphans explicitly.
+      final upsert = await repo.upsertByName('Ghosted');
+      final tagId = (upsert as Ok<Tag, AppError>).value.id;
+      // Insert an orphan junction directly (no corresponding bookmark row).
+      await repo.linkBookmarkTag('ghost-bookmark-id', tagId);
+
+      final list = await repo.watchAllWithCounts().first;
+      expect(list.single.count, 1);
+    });
   });
 }

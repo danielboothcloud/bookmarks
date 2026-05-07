@@ -27,4 +27,30 @@ abstract class Bookmark with _$Bookmark {
         createdAt: DateTime.fromMillisecondsSinceEpoch(row.createdAt),
         updatedAt: DateTime.fromMillisecondsSinceEpoch(row.updatedAt),
       );
+
+  /// Build a Bookmark from primitive column values. Used by `customSelect`
+  /// query callers (e.g. [BookmarkRepository.watchByTagId]) that receive a
+  /// Drift `QueryRow` rather than the typed `BookmarkRow` companion. The
+  /// alternative -- materialising a `BookmarkRow` from the QueryRow then
+  /// calling [Bookmark.fromDrift] -- is two conversions; this is one.
+  factory Bookmark.fromDriftRow({
+    required String id,
+    required String url,
+    required String title,
+    String? notes,
+    String? folderId,
+    String? faviconBase64,
+    required int createdAt,
+    required int updatedAt,
+  }) =>
+      Bookmark(
+        id: id,
+        url: url,
+        title: title,
+        notes: notes,
+        folderId: folderId,
+        faviconBase64: faviconBase64,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(createdAt),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(updatedAt),
+      );
 }

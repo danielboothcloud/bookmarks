@@ -58,11 +58,23 @@ class FolderRepository implements IFolderRepository {
     }
     try {
       final result = await _db.transaction(() async {
-        // Bookmarks first, folders second. SQLite without a FK constraint
-        // (folder_id is plain TEXT NULLABLE -- see Architecture line 222-226)
-        // doesn't enforce ordering today; we still order this way so a
-        // hypothetical future FK migration with ON DELETE CASCADE doesn't
-        // require reordering.
+        // Junctions first, then bookmarks, then folders. SQLite has no FK
+        // enforcement on bookmark_tags (architecture rejects FKs), so the
+        // junction rows for the about-to-be-deleted bookmarks must be
+        // explicitly cleaned -- otherwise they linger as orphans, inflating
+        // the sidebar tag count via TagRepository.watchAllWithCounts'
+        // COUNT(bt.bookmark_id) aggregation. The bookmark/folder ordering is
+        // preserved so a hypothetical future FK migration with ON DELETE
+        // CASCADE doesn't require re-ordering.
+        await _db.customUpdate(
+          'DELETE FROM bookmark_tags WHERE bookmark_id IN ('
+          '  SELECT id FROM bookmarks WHERE folder_id IN ('
+          '${List.filled(folderIds.length, '?').join(',')}'
+          '  )'
+          ')',
+          variables: folderIds.map(Variable<String>.new).toList(),
+          updates: {_db.bookmarkTags},
+        );
         final bookmarksDeleted =
             await (_db.delete(_db.bookmarks)
                   ..where((t) => t.folderId.isIn(folderIds)))
@@ -71,6 +83,14 @@ class FolderRepository implements IFolderRepository {
             await (_db.delete(_db.folders)
                   ..where((t) => t.id.isIn(folderIds)))
                 .go();
+        // Sweep tags whose last junction was just removed by the cascade
+        // (revised FR16, v5). Cheap anti-join; scoped to tags with zero
+        // remaining junctions.
+        await _db.customUpdate(
+          'DELETE FROM tags '
+          'WHERE id NOT IN (SELECT DISTINCT tag_id FROM bookmark_tags)',
+          updates: {_db.tags},
+        );
         return (folders: foldersDeleted, bookmarks: bookmarksDeleted);
       });
       return Ok<({int folders, int bookmarks}), AppError>(result);

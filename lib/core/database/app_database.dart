@@ -21,7 +21,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -104,6 +104,33 @@ class AppDatabase extends _$AppDatabase {
                 'CREATE INDEX IF NOT EXISTS idx_bookmark_tags_tag_id '
                     'ON bookmark_tags (tag_id);',
               ),
+            );
+          }
+          if (from < 5) {
+            // v5 is a DATA-only migration -- no schema change. It cleans up
+            // two classes of stale rows that pre-v5 application paths could
+            // leave behind:
+            //
+            //  1. Orphan junction rows in `bookmark_tags` where the referenced
+            //     `bookmark_id` no longer exists (pre-fix `BookmarkRepository
+            //     .delete` did NOT cascade-clean junctions; pre-fix
+            //     `FolderRepository.deleteCascade` had the same gap). These
+            //     orphans inflated the sidebar tag count without contributing
+            //     to the user-visible bookmark list.
+            //
+            //  2. Orphan tag rows whose last junction was cleaned in step 1
+            //     (or removed by pre-v5 `unlinkBookmarkTag`, which preserved
+            //     the tag per the original FR16 reading). FR16 is updated in
+            //     v5: a tag is hard-deleted when its last junction is gone.
+            //
+            // Both queries are idempotent and cheap (PK / indexed lookups).
+            await customStatement(
+              'DELETE FROM bookmark_tags '
+              'WHERE bookmark_id NOT IN (SELECT id FROM bookmarks)',
+            );
+            await customStatement(
+              'DELETE FROM tags '
+              'WHERE id NOT IN (SELECT DISTINCT tag_id FROM bookmark_tags)',
             );
           }
         },

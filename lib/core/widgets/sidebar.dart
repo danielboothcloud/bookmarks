@@ -6,6 +6,8 @@ import '../../features/folders/application/folder_notifier.dart';
 import '../../features/folders/application/folder_providers.dart';
 import '../../features/folders/domain/folder.dart';
 import '../../features/folders/presentation/widgets/folder_tree.dart';
+import '../../features/tags/application/tag_providers.dart';
+import '../../features/tags/presentation/widgets/tag_list.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 
@@ -62,6 +64,19 @@ class Sidebar extends ConsumerWidget {
                       if (item.branchIndex == 1) {
                         ref
                             .read(selectedFolderIdProvider.notifier)
+                            .clear();
+                      }
+                      // Story 2.6 AC3: clicking 'All Bookmarks' is the
+                      // exit-the-tag-filter gesture; clear the tag selection
+                      // so a subsequent return to the tags branch shows the
+                      // placeholder rather than a stale selection. The Tags
+                      // tile (branch 2) deliberately does NOT clear --
+                      // selection persistence on navrail-only navigation
+                      // is desirable (return-via-navrail returns to the
+                      // same filtered view).
+                      if (item.branchIndex == 0) {
+                        ref
+                            .read(selectedTagIdProvider.notifier)
                             .clear();
                       }
                       navigationShell.goBranch(
@@ -134,6 +149,8 @@ class Sidebar extends ConsumerWidget {
                           },
                         ),
                         const FolderTree(),
+                        const SizedBox(height: AppSpacing.md),
+                        const TagList(),
                       ],
                     ),
                   ),

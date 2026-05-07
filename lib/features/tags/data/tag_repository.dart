@@ -6,6 +6,7 @@ import '../../../core/error/app_error.dart';
 import '../../../core/error/result.dart';
 import '../domain/i_tag_repository.dart';
 import '../domain/tag.dart';
+import '../domain/tag_with_count.dart';
 
 class TagRepository implements ITagRepository {
   TagRepository(this._db);
@@ -37,6 +38,56 @@ class TagRepository implements ITagRepository {
                   updatedAt: DateTime.fromMillisecondsSinceEpoch(
                     r.read<int>('updated_at'),
                   ),
+                ),
+              )
+              .toList(growable: false),
+        );
+  }
+
+  @override
+  Stream<List<TagWithCount>> watchAllWithCounts() {
+    // LEFT JOIN keeps tags with zero junctions in the result (count = 0 --
+    // FR16: tags survive their last bookmark). GROUP BY t.id collapses
+    // junction multiplicity to one row per tag. ORDER BY name COLLATE NOCASE
+    // matches `watchAll`'s ordering so consumers can switch between the two
+    // streams without re-sorting client-side. The LEFT JOIN reuses the
+    // `idx_bookmark_tags_tag_id` reverse-direction index installed in Story
+    // 2.5 -- exactly the access pattern the index was added for. A single
+    // SQL emission is atomically consistent: combining two streams (tags +
+    // counts) in the application layer would surface "added with count 0"
+    // frames before the count stream catches up.
+    //
+    // COUNT(bt.bookmark_id) (not COUNT(*)): with LEFT JOIN, a tag with no
+    // junction rows produces one row whose `bt.*` columns are NULL.
+    // COUNT(*) would count that NULL row as 1; COUNT(bt.bookmark_id) skips
+    // NULLs and returns 0 -- the standard "count matched right-side rows"
+    // SQL idiom.
+    return _db
+        .customSelect(
+          'SELECT t.id, t.name, t.created_at, t.updated_at, '
+          '       COUNT(bt.bookmark_id) AS bookmark_count '
+          'FROM tags t '
+          'LEFT JOIN bookmark_tags bt ON bt.tag_id = t.id '
+          'GROUP BY t.id '
+          'ORDER BY t.name COLLATE NOCASE ASC',
+          readsFrom: {_db.tags, _db.bookmarkTags},
+        )
+        .watch()
+        .map(
+          (rows) => rows
+              .map(
+                (r) => TagWithCount(
+                  tag: Tag(
+                    id: r.read<String>('id'),
+                    name: r.read<String>('name'),
+                    createdAt: DateTime.fromMillisecondsSinceEpoch(
+                      r.read<int>('created_at'),
+                    ),
+                    updatedAt: DateTime.fromMillisecondsSinceEpoch(
+                      r.read<int>('updated_at'),
+                    ),
+                  ),
+                  count: r.read<int>('bookmark_count'),
                 ),
               )
               .toList(growable: false),
@@ -185,11 +236,25 @@ class TagRepository implements ITagRepository {
     String tagId,
   ) async {
     try {
-      await (_db.delete(_db.bookmarkTags)
-            ..where(
-              (t) => t.bookmarkId.equals(bookmarkId) & t.tagId.equals(tagId),
-            ))
-          .go();
+      await _db.transaction(() async {
+        await (_db.delete(_db.bookmarkTags)
+              ..where(
+                (t) => t.bookmarkId.equals(bookmarkId) & t.tagId.equals(tagId),
+              ))
+            .go();
+        // FR16 (revised v5): hard-delete the tag if no junctions reference it.
+        // Avoids the "tag count = 0 row stays in the sidebar forever" UX. If
+        // the user re-types the same name later, upsertByName creates a fresh
+        // row (different uuid, same case via lower(name) UNIQUE). Targeted
+        // delete -- only the just-unlinked tag is checked, not a full sweep.
+        await _db.customUpdate(
+          'DELETE FROM tags WHERE id = ? AND id NOT IN ('
+          '  SELECT tag_id FROM bookmark_tags WHERE tag_id = ? LIMIT 1'
+          ')',
+          variables: [Variable<String>(tagId), Variable<String>(tagId)],
+          updates: {_db.tags},
+        );
+      });
       // We DON'T return Err on affected==0 (unlike BookmarkRepository.delete
       // which does for NotFound semantics). An idempotent unlink is the right
       // behaviour: removing a chip that's already gone (e.g. via a sync merge)

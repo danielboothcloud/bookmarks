@@ -1,6 +1,7 @@
 import '../../../core/error/app_error.dart';
 import '../../../core/error/result.dart';
 import 'tag.dart';
+import 'tag_with_count.dart';
 
 abstract interface class ITagRepository {
   /// All tags ordered alphabetically by name (case-insensitive). The alpha
@@ -8,6 +9,13 @@ abstract interface class ITagRepository {
   /// reads better than createdAt for tags because users mentally search the
   /// tag list, not chronologically scan it.
   Stream<List<Tag>> watchAll();
+
+  /// All tags (alpha order, case-insensitive) joined with their current
+  /// bookmark count via LEFT JOIN on the bookmark_tags junction. Tags with
+  /// zero linked bookmarks emit with count = 0 (FR16 -- tags survive their
+  /// last bookmark; sidebar shows count = 0 cases). Reactive: re-emits on
+  /// any change to either `tags` or `bookmark_tags`.
+  Stream<List<TagWithCount>> watchAllWithCounts();
 
   /// Tags currently linked to [bookmarkId] via the junction. Returned in
   /// `BookmarkTags.createdAt asc` order so the chip order matches the order
@@ -36,8 +44,12 @@ abstract interface class ITagRepository {
     String tagId,
   );
 
-  /// Deletes the junction row. The Tag itself is preserved (FR16 -- tags
-  /// survive their last bookmark; sidebar shows count = 0).
+  /// Deletes the junction row. If this was the tag's LAST junction, the Tag
+  /// row is also deleted in the same transaction (revised FR16, v5: tags do
+  /// NOT survive their last bookmark -- a count = 0 row in the sidebar is
+  /// confusing UX, and re-typing the same name later transparently creates a
+  /// fresh tag via upsertByName). Idempotent: removing a chip that's already
+  /// gone (e.g. via a sync merge) is a calm no-op.
   Future<Result<void, AppError>> unlinkBookmarkTag(
     String bookmarkId,
     String tagId,

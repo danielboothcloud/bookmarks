@@ -12,6 +12,11 @@ import 'package:bookmarks/features/folders/application/folder_notifier.dart';
 import 'package:bookmarks/features/folders/application/folder_providers.dart';
 import 'package:bookmarks/features/folders/domain/folder.dart' show Folder;
 import 'package:bookmarks/features/folders/presentation/widgets/folder_tree.dart';
+import 'package:bookmarks/features/tags/application/tag_providers.dart';
+import 'package:bookmarks/features/tags/domain/i_tag_repository.dart';
+import 'package:bookmarks/features/tags/domain/tag.dart';
+import 'package:bookmarks/features/tags/domain/tag_with_count.dart';
+import 'package:bookmarks/features/tags/presentation/widgets/tag_list.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,6 +24,10 @@ import 'package:flutter_test/flutter_test.dart';
 class _FakeBookmarkRepository implements IBookmarkRepository {
   @override
   Stream<List<Bookmark>> watchAll() => Stream.value(const <Bookmark>[]);
+
+  @override
+  Stream<List<Bookmark>> watchByTagId(String tagId) =>
+      const Stream<List<Bookmark>>.empty();
 
   @override
   Future<Result<Bookmark, AppError>> getById(String id) async =>
@@ -68,14 +77,64 @@ Widget _buildApp({required ProviderContainer container}) {
   );
 }
 
+class _NoopTagRepo implements ITagRepository {
+  @override
+  Stream<List<Tag>> watchAll() => const Stream<List<Tag>>.empty();
+
+  @override
+  Stream<List<TagWithCount>> watchAllWithCounts() =>
+      const Stream<List<TagWithCount>>.empty();
+
+  @override
+  Stream<List<Tag>> watchForBookmark(String bookmarkId) =>
+      const Stream<List<Tag>>.empty();
+
+  @override
+  Future<Result<Tag, AppError>> getById(String id) async =>
+      const Err<Tag, AppError>(NotFoundError());
+
+  @override
+  Future<Result<Tag, AppError>> findByName(String name) async =>
+      const Err<Tag, AppError>(NotFoundError());
+
+  @override
+  Future<Result<Tag, AppError>> upsertByName(String name) async {
+    final t = DateTime.fromMillisecondsSinceEpoch(0);
+    return Ok<Tag, AppError>(
+      Tag(id: name, name: name, createdAt: t, updatedAt: t),
+    );
+  }
+
+  @override
+  Future<Result<void, AppError>> linkBookmarkTag(
+          String bookmarkId, String tagId) async =>
+      const Ok<void, AppError>(null);
+
+  @override
+  Future<Result<void, AppError>> unlinkBookmarkTag(
+          String bookmarkId, String tagId) async =>
+      const Ok<void, AppError>(null);
+
+  @override
+  Future<Result<List<Tag>, AppError>> upsertAndLinkAll({
+    required String bookmarkId,
+    required List<String> tagNames,
+  }) async =>
+      const Ok<List<Tag>, AppError>(<Tag>[]);
+}
+
 ProviderContainer _container({
   Stream<List<Folder>>? folderStream,
+  Stream<List<TagWithCount>>? tagsWithCountsStream,
   FolderNotifier Function()? notifierFactory,
 }) {
   return ProviderContainer(overrides: [
     bookmarkRepositoryProvider.overrideWithValue(_FakeBookmarkRepository()),
+    tagRepositoryProvider.overrideWithValue(_NoopTagRepo()),
     watchFoldersProvider
         .overrideWith((ref) => folderStream ?? const Stream<List<Folder>>.empty()),
+    watchTagsWithCountsProvider.overrideWith((ref) =>
+        tagsWithCountsStream ?? const Stream<List<TagWithCount>>.empty()),
     folderNotifierProvider.overrideWith(
         notifierFactory ?? _RecordingFolderNotifier.new),
   ]);
@@ -353,5 +412,85 @@ void main() {
     await tester.pumpAndSettle();
     expect(container.read(selectedFolderIdProvider), 'sel-1',
         reason: 'Settings tap must leave folder selection intact');
+  });
+
+  // ------------------------------------------------------------------
+  // Story 2.6: TagList integration + tag-clear behaviour
+  // ------------------------------------------------------------------
+
+  testWidgets(
+      'TagList renders below FolderTree in the scrollable region '
+      '(non-empty tag stream)', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    final container = _container(
+      tagsWithCountsStream: Stream.value([
+        TagWithCount(
+          tag: Tag(
+            id: 't1',
+            name: 'flutter',
+            createdAt: DateTime.fromMillisecondsSinceEpoch(0),
+            updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+          ),
+          count: 2,
+        ),
+      ]),
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(_buildApp(container: container));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(FolderTree), findsOneWidget);
+    expect(find.byType(TagList), findsOneWidget);
+    final folderTreeY = tester.getTopLeft(find.byType(FolderTree)).dy;
+    final tagListY = tester.getTopLeft(find.byType(TagList)).dy;
+    expect(tagListY, greaterThan(folderTreeY),
+        reason: 'TagList must appear below FolderTree in the sidebar');
+    expect(find.text('TAGS'), findsOneWidget);
+    expect(find.text('flutter'), findsOneWidget);
+  });
+
+  testWidgets(
+      'clicking the All Bookmarks navrail tile clears '
+      'selectedTagIdProvider (Story 2.6 AC3 exit-the-tag-filter gesture)',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    final container = _container();
+    addTearDown(container.dispose);
+
+    container.read(selectedTagIdProvider.notifier).select('t1');
+
+    await tester.pumpWidget(_buildApp(container: container));
+    await tester.pump();
+
+    expect(container.read(selectedTagIdProvider), 't1');
+
+    await tester.tap(find.text('All Bookmarks'));
+    await tester.pumpAndSettle();
+
+    expect(container.read(selectedTagIdProvider), isNull,
+        reason: 'All Bookmarks tap is the canonical exit-the-tag-filter '
+            'gesture (AC3)');
+  });
+
+  testWidgets(
+      'clicking the Tags navrail tile does NOT clear '
+      'selectedTagIdProvider (selection persists across navrail-only nav)',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    final container = _container();
+    addTearDown(container.dispose);
+
+    container.read(selectedTagIdProvider.notifier).select('t1');
+
+    await tester.pumpWidget(_buildApp(container: container));
+    await tester.pump();
+
+    await tester.tap(find.text('Tags'));
+    await tester.pumpAndSettle();
+
+    expect(container.read(selectedTagIdProvider), 't1',
+        reason: 'Tags tap must preserve selection -- "go back to where I '
+            'was" gesture, not "exit filter" (AC3)');
   });
 }

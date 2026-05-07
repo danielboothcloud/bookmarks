@@ -12,6 +12,7 @@ import 'package:bookmarks/features/bookmarks/presentation/widgets/bookmark_card.
 import 'package:bookmarks/features/tags/application/tag_providers.dart';
 import 'package:bookmarks/features/tags/domain/i_tag_repository.dart';
 import 'package:bookmarks/features/tags/domain/tag.dart';
+import 'package:bookmarks/features/tags/domain/tag_with_count.dart';
 import 'package:bookmarks/features/tags/presentation/widgets/bookmark_tag_chip_row.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,6 +21,10 @@ import 'package:flutter_test/flutter_test.dart';
 class _NoopRepo implements IBookmarkRepository {
   @override
   Stream<List<Bookmark>> watchAll() => const Stream<List<Bookmark>>.empty();
+
+  @override
+  Stream<List<Bookmark>> watchByTagId(String tagId) =>
+      const Stream<List<Bookmark>>.empty();
 
   @override
   Future<Result<Bookmark, AppError>> getById(String id) async =>
@@ -48,6 +53,10 @@ class _SeededTagRepo implements ITagRepository {
 
   @override
   Stream<List<Tag>> watchAll() => const Stream<List<Tag>>.empty();
+
+  @override
+  Stream<List<TagWithCount>> watchAllWithCounts() =>
+      const Stream<List<TagWithCount>>.empty();
 
   @override
   Stream<List<Tag>> watchForBookmark(String bookmarkId) =>

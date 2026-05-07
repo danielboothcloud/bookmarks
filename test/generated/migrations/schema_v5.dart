@@ -1084,11 +1084,514 @@ class SyncQueueCompanion extends UpdateCompanion<SyncQueueData> {
   }
 }
 
-class DatabaseAtV3 extends GeneratedDatabase {
-  DatabaseAtV3(QueryExecutor e) : super(e);
+class Tags extends Table with TableInfo<Tags, TagsData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  Tags(this.attachedDatabase, [this._alias]);
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    $customConstraints: 'NOT NULL',
+  );
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    $customConstraints: 'NOT NULL',
+  );
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    $customConstraints: 'NOT NULL',
+  );
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    $customConstraints: 'NOT NULL',
+  );
+  @override
+  List<GeneratedColumn> get $columns => [id, name, createdAt, updatedAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'tags';
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  TagsData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TagsData(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  Tags createAlias(String alias) {
+    return Tags(attachedDatabase, alias);
+  }
+
+  @override
+  List<String> get customConstraints => const ['PRIMARY KEY(id)'];
+  @override
+  bool get dontWriteConstraints => true;
+}
+
+class TagsData extends DataClass implements Insertable<TagsData> {
+  final String id;
+  final String name;
+  final int createdAt;
+  final int updatedAt;
+  const TagsData({
+    required this.id,
+    required this.name,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['name'] = Variable<String>(name);
+    map['created_at'] = Variable<int>(createdAt);
+    map['updated_at'] = Variable<int>(updatedAt);
+    return map;
+  }
+
+  TagsCompanion toCompanion(bool nullToAbsent) {
+    return TagsCompanion(
+      id: Value(id),
+      name: Value(name),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory TagsData.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TagsData(
+      id: serializer.fromJson<String>(json['id']),
+      name: serializer.fromJson<String>(json['name']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'name': serializer.toJson<String>(name),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+    };
+  }
+
+  TagsData copyWith({
+    String? id,
+    String? name,
+    int? createdAt,
+    int? updatedAt,
+  }) => TagsData(
+    id: id ?? this.id,
+    name: name ?? this.name,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  TagsData copyWithCompanion(TagsCompanion data) {
+    return TagsData(
+      id: data.id.present ? data.id.value : this.id,
+      name: data.name.present ? data.name.value : this.name,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TagsData(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, name, createdAt, updatedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TagsData &&
+          other.id == this.id &&
+          other.name == this.name &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class TagsCompanion extends UpdateCompanion<TagsData> {
+  final Value<String> id;
+  final Value<String> name;
+  final Value<int> createdAt;
+  final Value<int> updatedAt;
+  final Value<int> rowid;
+  const TagsCompanion({
+    this.id = const Value.absent(),
+    this.name = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  TagsCompanion.insert({
+    required String id,
+    required String name,
+    required int createdAt,
+    required int updatedAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       name = Value(name),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<TagsData> custom({
+    Expression<String>? id,
+    Expression<String>? name,
+    Expression<int>? createdAt,
+    Expression<int>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (name != null) 'name': name,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  TagsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? name,
+    Value<int>? createdAt,
+    Value<int>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return TagsCompanion(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TagsCompanion(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class BookmarkTags extends Table
+    with TableInfo<BookmarkTags, BookmarkTagsData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  BookmarkTags(this.attachedDatabase, [this._alias]);
+  late final GeneratedColumn<String> bookmarkId = GeneratedColumn<String>(
+    'bookmark_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    $customConstraints: 'NOT NULL',
+  );
+  late final GeneratedColumn<String> tagId = GeneratedColumn<String>(
+    'tag_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    $customConstraints: 'NOT NULL',
+  );
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    $customConstraints: 'NOT NULL',
+  );
+  @override
+  List<GeneratedColumn> get $columns => [bookmarkId, tagId, createdAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'bookmark_tags';
+  @override
+  Set<GeneratedColumn> get $primaryKey => {bookmarkId, tagId};
+  @override
+  BookmarkTagsData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return BookmarkTagsData(
+      bookmarkId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}bookmark_id'],
+      )!,
+      tagId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tag_id'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  BookmarkTags createAlias(String alias) {
+    return BookmarkTags(attachedDatabase, alias);
+  }
+
+  @override
+  List<String> get customConstraints => const [
+    'PRIMARY KEY(bookmark_id, tag_id)',
+  ];
+  @override
+  bool get dontWriteConstraints => true;
+}
+
+class BookmarkTagsData extends DataClass
+    implements Insertable<BookmarkTagsData> {
+  final String bookmarkId;
+  final String tagId;
+  final int createdAt;
+  const BookmarkTagsData({
+    required this.bookmarkId,
+    required this.tagId,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['bookmark_id'] = Variable<String>(bookmarkId);
+    map['tag_id'] = Variable<String>(tagId);
+    map['created_at'] = Variable<int>(createdAt);
+    return map;
+  }
+
+  BookmarkTagsCompanion toCompanion(bool nullToAbsent) {
+    return BookmarkTagsCompanion(
+      bookmarkId: Value(bookmarkId),
+      tagId: Value(tagId),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory BookmarkTagsData.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return BookmarkTagsData(
+      bookmarkId: serializer.fromJson<String>(json['bookmarkId']),
+      tagId: serializer.fromJson<String>(json['tagId']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'bookmarkId': serializer.toJson<String>(bookmarkId),
+      'tagId': serializer.toJson<String>(tagId),
+      'createdAt': serializer.toJson<int>(createdAt),
+    };
+  }
+
+  BookmarkTagsData copyWith({
+    String? bookmarkId,
+    String? tagId,
+    int? createdAt,
+  }) => BookmarkTagsData(
+    bookmarkId: bookmarkId ?? this.bookmarkId,
+    tagId: tagId ?? this.tagId,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  BookmarkTagsData copyWithCompanion(BookmarkTagsCompanion data) {
+    return BookmarkTagsData(
+      bookmarkId: data.bookmarkId.present
+          ? data.bookmarkId.value
+          : this.bookmarkId,
+      tagId: data.tagId.present ? data.tagId.value : this.tagId,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('BookmarkTagsData(')
+          ..write('bookmarkId: $bookmarkId, ')
+          ..write('tagId: $tagId, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(bookmarkId, tagId, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is BookmarkTagsData &&
+          other.bookmarkId == this.bookmarkId &&
+          other.tagId == this.tagId &&
+          other.createdAt == this.createdAt);
+}
+
+class BookmarkTagsCompanion extends UpdateCompanion<BookmarkTagsData> {
+  final Value<String> bookmarkId;
+  final Value<String> tagId;
+  final Value<int> createdAt;
+  final Value<int> rowid;
+  const BookmarkTagsCompanion({
+    this.bookmarkId = const Value.absent(),
+    this.tagId = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  BookmarkTagsCompanion.insert({
+    required String bookmarkId,
+    required String tagId,
+    required int createdAt,
+    this.rowid = const Value.absent(),
+  }) : bookmarkId = Value(bookmarkId),
+       tagId = Value(tagId),
+       createdAt = Value(createdAt);
+  static Insertable<BookmarkTagsData> custom({
+    Expression<String>? bookmarkId,
+    Expression<String>? tagId,
+    Expression<int>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (bookmarkId != null) 'bookmark_id': bookmarkId,
+      if (tagId != null) 'tag_id': tagId,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  BookmarkTagsCompanion copyWith({
+    Value<String>? bookmarkId,
+    Value<String>? tagId,
+    Value<int>? createdAt,
+    Value<int>? rowid,
+  }) {
+    return BookmarkTagsCompanion(
+      bookmarkId: bookmarkId ?? this.bookmarkId,
+      tagId: tagId ?? this.tagId,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (bookmarkId.present) {
+      map['bookmark_id'] = Variable<String>(bookmarkId.value);
+    }
+    if (tagId.present) {
+      map['tag_id'] = Variable<String>(tagId.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('BookmarkTagsCompanion(')
+          ..write('bookmarkId: $bookmarkId, ')
+          ..write('tagId: $tagId, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class DatabaseAtV5 extends GeneratedDatabase {
+  DatabaseAtV5(QueryExecutor e) : super(e);
   late final Bookmarks bookmarks = Bookmarks(this);
   late final Folders folders = Folders(this);
   late final SyncQueue syncQueue = SyncQueue(this);
+  late final Tags tags = Tags(this);
+  late final BookmarkTags bookmarkTags = BookmarkTags(this);
   late final Index idxBookmarksFolderId = Index(
     'idx_bookmarks_folder_id',
     'CREATE INDEX idx_bookmarks_folder_id ON bookmarks (folder_id)',
@@ -1105,6 +1608,14 @@ class DatabaseAtV3 extends GeneratedDatabase {
     'idx_folders_updated_at',
     'CREATE INDEX idx_folders_updated_at ON folders (updated_at)',
   );
+  late final Index idxTagsUpdatedAt = Index(
+    'idx_tags_updated_at',
+    'CREATE INDEX idx_tags_updated_at ON tags (updated_at)',
+  );
+  late final Index idxBookmarkTagsTagId = Index(
+    'idx_bookmark_tags_tag_id',
+    'CREATE INDEX idx_bookmark_tags_tag_id ON bookmark_tags (tag_id)',
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1113,11 +1624,15 @@ class DatabaseAtV3 extends GeneratedDatabase {
     bookmarks,
     folders,
     syncQueue,
+    tags,
+    bookmarkTags,
     idxBookmarksFolderId,
     idxBookmarksUpdatedAt,
     idxFoldersParentId,
     idxFoldersUpdatedAt,
+    idxTagsUpdatedAt,
+    idxBookmarkTagsTagId,
   ];
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 5;
 }

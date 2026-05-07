@@ -21,6 +21,10 @@ class _FakeBookmarkRepository implements IBookmarkRepository {
   Stream<List<Bookmark>> watchAll() => Stream.value(const <Bookmark>[]);
 
   @override
+  Stream<List<Bookmark>> watchByTagId(String tagId) =>
+      const Stream<List<Bookmark>>.empty();
+
+  @override
   Future<Result<Bookmark, AppError>> getById(String id) async =>
       const Err<Bookmark, AppError>(StorageError('not found'));
 

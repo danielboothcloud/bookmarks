@@ -4,6 +4,7 @@ import 'package:bookmarks/features/tags/application/tag_notifier.dart';
 import 'package:bookmarks/features/tags/application/tag_providers.dart';
 import 'package:bookmarks/features/tags/domain/i_tag_repository.dart';
 import 'package:bookmarks/features/tags/domain/tag.dart';
+import 'package:bookmarks/features/tags/domain/tag_with_count.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -20,6 +21,10 @@ class _RecordingTagRepository implements ITagRepository {
 
   @override
   Stream<List<Tag>> watchAll() => const Stream<List<Tag>>.empty();
+
+  @override
+  Stream<List<TagWithCount>> watchAllWithCounts() =>
+      const Stream<List<TagWithCount>>.empty();
 
   @override
   Stream<List<Tag>> watchForBookmark(String bookmarkId) =>
