@@ -22,6 +22,8 @@ class _RecordingFolderNotifier extends FolderNotifier {
   String? lastAddParentId;
   String nextNewId = 'fake-new-id';
   final List<String> deleteCascadeCalls = <String>[];
+  final List<({String id, String name})> renameCalls =
+      <({String id, String name})>[];
 
   @override
   Future<void> build() async {}
@@ -38,8 +40,7 @@ class _RecordingFolderNotifier extends FolderNotifier {
 
   @override
   Future<void> renameFolder(String id, String newName) async {
-    // No-op for context-menu tests -- rename dispatch is observable via the
-    // pendingFolderEditIdProvider transition.
+    renameCalls.add((id: id, name: newName));
   }
 
   @override
@@ -274,24 +275,32 @@ void main() {
   });
 
   testWidgets(
-      'Right-click does NOT navigate / does not require a shell '
-      '(secondary-tap handler must not call goBranch)', (tester) async {
-    // Rebuild a wrap WITHOUT a StatefulShellRoute -- if the secondary-tap
-    // handler ever called shell.goBranch it would throw on the missing shell.
-    // The fact that this test passes with no exceptions documents that
-    // contract.
+      'Secondary-tap handler does NOT reach into StatefulNavigationShell '
+      '(no shell mounted, no exception, no selection change, no branch swap)',
+      (tester) async {
+    // Wrap WITHOUT a StatefulShellRoute. If the secondary-tap handler ever
+    // called shell.goBranch (or otherwise depended on inherited shell state)
+    // it would throw on the missing shell -- so the no-exception assertion
+    // doubles as a structural guard against accidental shell coupling.
     final s = _setup();
 
     await tester.pumpWidget(_wrap(s.container));
     s.stream.add([_f('a', name: 'Personal')]);
     await tester.pump();
 
+    final selectedBefore = s.container.read(selectedFolderIdProvider);
+
     _secondaryGestureFor(tester, 'Personal')
         .onSecondaryTapDown!(_tapAt(const Offset(40, 8)));
     await tester.pump();
 
-    expect(tester.takeException(), isNull);
-    expect(find.widgetWithText(MenuItemButton, 'Rename'), findsOneWidget);
+    expect(tester.takeException(), isNull,
+        reason:
+            'no shell-coupling: secondary-tap must not call StatefulNavigationShell.maybeOf or goBranch');
+    expect(s.container.read(selectedFolderIdProvider), selectedBefore,
+        reason: 'right-click is non-selecting (selection drives navigation)');
+    expect(find.widgetWithText(MenuItemButton, 'Rename'), findsOneWidget,
+        reason: 'menu still opens cleanly without a shell');
   });
 
   testWidgets(
@@ -326,6 +335,52 @@ void main() {
   });
 
   testWidgets(
+      'Real secondary-button pointer event on Beta\'s row dismisses Alpha\'s '
+      'in-flight rename via TextField.onTapOutside (AC6 commit-on-right-click)',
+      (tester) async {
+    final s = _setup();
+
+    s.container.read(pendingFolderEditIdProvider.notifier).start('a');
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([
+      _f('a', name: 'Alpha', createdAt: 1000),
+      _f('b', name: 'Beta', createdAt: 2000),
+    ]);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // Type a fresh value into Alpha's rename TextField so we can observe the
+    // commit on tap-outside.
+    await tester.enterText(find.byType(TextField), 'Alpha-edited');
+    await tester.pump();
+
+    // Drive a *real* secondary-button gesture on Beta's row. Calling the
+    // GestureDetector's onSecondaryTapDown directly (the pattern used in
+    // sibling tests) bypasses the gesture arena -- which means the
+    // TextField's TapRegion doesn't see a pointer-down event, and
+    // onTapOutside never fires. A real PointerDownEvent via startGesture is
+    // the only way to exercise the AC6 commit path end-to-end.
+    final betaCenter = tester.getCenter(find.text('Beta'));
+    final gesture = await tester.startGesture(
+      betaCenter,
+      kind: PointerDeviceKind.mouse,
+      buttons: kSecondaryMouseButton,
+    );
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    final notifier = _readNotifier(s.container);
+    expect(notifier.renameCalls, isNotEmpty,
+        reason: 'TextField.onTapOutside must commit Alpha\'s pending edit');
+    expect(notifier.renameCalls.last,
+        (id: 'a', name: 'Alpha-edited'),
+        reason: 'commit carries the edited value, not the original');
+    expect(find.widgetWithText(MenuItemButton, 'Rename'), findsOneWidget,
+        reason: 'Beta\'s menu opens on the same gesture that committed Alpha');
+  });
+
+  testWidgets(
       'Right-click on a row already showing a delete confirmation re-opens '
       'menu normally; subsequent Delete tap re-prompts (idempotent)',
       (tester) async {
@@ -354,8 +409,42 @@ void main() {
   });
 
   testWidgets(
-      'Esc closes the menu when overlay focus is inside the menu items '
-      '(MenuAnchor default Esc handling)', (tester) async {
+      'Right-click + Delete on folder B while folder A is mid-confirmation '
+      'migrates the confirmation from A to B (AC7 single-id semantics, '
+      'second branch)', (tester) async {
+    final s = _setup();
+
+    s.container.read(pendingFolderDeleteIdProvider.notifier).prompt('a');
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([
+      _f('a', name: 'Alpha', createdAt: 1000),
+      _f('b', name: 'Beta', createdAt: 2000),
+    ]);
+    await tester.pump();
+
+    expect(find.text("Delete 'Alpha' and all its contents?"), findsOneWidget,
+        reason: 'Alpha\'s confirmation is the starting state');
+
+    _secondaryGestureFor(tester, 'Beta')
+        .onSecondaryTapDown!(_tapAt(const Offset(40, 8)));
+    await tester.pump();
+
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Delete'));
+    await tester.pumpAndSettle();
+
+    expect(s.container.read(pendingFolderDeleteIdProvider), 'b',
+        reason: 'Notifier single-id state migrates from Alpha to Beta');
+    expect(find.text("Delete 'Alpha' and all its contents?"), findsNothing,
+        reason: 'Alpha\'s confirmation collapses on the migration');
+    expect(find.text("Delete 'Beta' and all its contents?"), findsOneWidget,
+        reason: 'Beta\'s confirmation renders in its place');
+  });
+
+  testWidgets(
+      'Esc closes the menu when opened via mouse right-click (focus stays on '
+      'the row anchor; CallbackShortcuts on the anchor catches Esc -- '
+      'mirrors folder_picker.dart)', (tester) async {
     final s = _setup();
 
     await tester.pumpWidget(_wrap(s.container));
@@ -368,17 +457,10 @@ void main() {
 
     expect(find.widgetWithText(MenuItemButton, 'Rename'), findsOneWidget);
 
-    // Focus the first menu item so Esc is routed to MenuAnchor's overlay
-    // (in production a keyboard-driven open would auto-focus; mouse-driven
-    // open does not, hence the explicit focus claim here).
-    final renameItemCtx =
-        tester.element(find.widgetWithText(MenuItemButton, 'Rename'));
-    FocusScope.of(renameItemCtx).requestFocus(
-      Focus.of(renameItemCtx).children.isNotEmpty
-          ? Focus.of(renameItemCtx).children.first
-          : Focus.of(renameItemCtx),
-    );
-    await tester.pump();
+    // No explicit focus claim into the menu items -- in production a
+    // mouse-opened menu leaves focus on the row's _rowFocusNode. The Esc
+    // path must work from there, otherwise AC5 is broken in the dominant
+    // open-style.
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
 

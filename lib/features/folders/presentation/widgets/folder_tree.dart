@@ -756,6 +756,9 @@ class _FolderContextMenuState extends ConsumerState<_FolderContextMenu> {
             final newId = await ref
                 .read(folderNotifierProvider.notifier)
                 .addFolder(parentId: widget.folder.id);
+            // Guard the post-await ref use: a parent collapse, navigation,
+            // or hot reload during the save can unmount this row.
+            if (!mounted) return;
             if (newId != null) {
               ref
                   .read(pendingFolderEditIdProvider.notifier)
@@ -774,23 +777,35 @@ class _FolderContextMenuState extends ConsumerState<_FolderContextMenu> {
           child: const Text('Delete'),
         ),
       ],
-      child: GestureDetector(
-        // Opaque so the secondary tap is not absorbed by the InkWell child --
-        // Material's InkWell does not handle secondary buttons and would
-        // otherwise eat the gesture, leaving the menu unreachable.
-        behavior: HitTestBehavior.opaque,
-        onSecondaryTapDown: (details) {
-          // Claim focus first so Esc / Cmd+N stay routed to AppShell's
-          // Shortcuts subtree once the menu closes -- mirrors the focus-claim
-          // discipline at _buildDisplayRowBody onTap.
-          widget.rowFocusNode.requestFocus();
-          if (_menuController.isOpen) {
-            _menuController.close();
-          } else {
-            _menuController.open(position: details.localPosition);
-          }
+      // CallbackShortcuts on the anchor: MenuAnchor's built-in Esc handler
+      // only fires when focus is inside the menu items, which only happens
+      // on keyboard-driven open. Mouse-driven opens leave focus on
+      // _rowFocusNode, so AC5 ("Esc closes the menu") would silently fail.
+      // Same gap-closer as folder_picker.dart line 73-78.
+      child: CallbackShortcuts(
+        bindings: <ShortcutActivator, VoidCallback>{
+          const SingleActivator(LogicalKeyboardKey.escape): () {
+            if (_menuController.isOpen) _menuController.close();
+          },
         },
-        child: widget.child,
+        child: GestureDetector(
+          // Opaque so the secondary tap is not absorbed by the InkWell child --
+          // Material's InkWell does not handle secondary buttons and would
+          // otherwise eat the gesture, leaving the menu unreachable.
+          behavior: HitTestBehavior.opaque,
+          onSecondaryTapDown: (details) {
+            // Claim focus first so Esc / Cmd+N stay routed to AppShell's
+            // Shortcuts subtree once the menu closes -- mirrors the focus-claim
+            // discipline at _buildDisplayRowBody onTap.
+            widget.rowFocusNode.requestFocus();
+            if (_menuController.isOpen) {
+              _menuController.close();
+            } else {
+              _menuController.open(position: details.localPosition);
+            }
+          },
+          child: widget.child,
+        ),
       ),
     );
   }
