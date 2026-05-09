@@ -1,7 +1,3 @@
-// TODO(story-2.5): convert to @riverpod once riverpod_generator is unblocked.
-// (Same analyzer-version conflict that pins the bookmarks/folders providers --
-// see bookmark_providers.dart header.)
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../main.dart';

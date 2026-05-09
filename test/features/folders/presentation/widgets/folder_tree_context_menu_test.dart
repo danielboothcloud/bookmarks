@@ -442,6 +442,68 @@ void main() {
   });
 
   testWidgets(
+      'Ctrl+Click on macOS opens the menu via the onTapDown fallback '
+      '(Flutter macOS engine does not always synthesise onSecondaryTapDown '
+      'for Ctrl+Click) AND does NOT select / navigate', (tester) async {
+    final s = _setup();
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([_f('a', name: 'Personal')]);
+    await tester.pump();
+
+    expect(s.container.read(selectedFolderIdProvider), isNull);
+
+    // Simulate the macOS Ctrl+Click path: Ctrl held, primary tap. The
+    // wrapping GestureDetector's onTapDown sees the modifier and opens the
+    // menu; the InkWell's onTap matches the modifier and bails before
+    // selection/navigation.
+    await simulateKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    addTearDown(() async {
+      await simulateKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    });
+    expect(HardwareKeyboard.instance.isControlPressed, isTrue,
+        reason: 'precondition: simulator must update HardwareKeyboard state');
+
+    // _secondaryGestureFor uniquely identifies the _FolderContextMenu's
+    // wrapping GestureDetector via its onSecondaryTapDown -- that same
+    // detector also owns onTapDown, so we drive the Ctrl+Click fallback
+    // through it. (Resolving via onTapDown alone would catch a Material-
+    // internal selection detector that sits closer to the text.)
+    _secondaryGestureFor(tester, 'Personal').onTapDown!(
+      _tapAt(const Offset(40, 8)),
+    );
+    await tester.pump();
+
+    expect(find.widgetWithText(MenuItemButton, 'Rename'), findsOneWidget,
+        reason: 'Ctrl+Click must open the same menu as right-click');
+    expect(s.container.read(selectedFolderIdProvider), isNull,
+        reason:
+            'Ctrl+Click must NOT also select the folder (no other macOS app does)');
+  });
+
+  testWidgets(
+      'Plain primary tap (no Ctrl) does NOT open the menu via the onTapDown '
+      'fallback -- selection/navigation path is preserved', (tester) async {
+    final s = _setup();
+
+    await tester.pumpWidget(_wrap(s.container));
+    s.stream.add([_f('a', name: 'Personal')]);
+    await tester.pump();
+
+    expect(HardwareKeyboard.instance.isControlPressed, isFalse,
+        reason: 'precondition: no Ctrl held');
+
+    _secondaryGestureFor(tester, 'Personal').onTapDown!(
+      _tapAt(const Offset(40, 8)),
+    );
+    await tester.pump();
+
+    expect(find.byType(MenuItemButton), findsNothing,
+        reason:
+            'onTapDown without Ctrl must be a no-op so plain taps stay clean');
+  });
+
+  testWidgets(
       'Esc closes the menu when opened via mouse right-click (focus stays on '
       'the row anchor; CallbackShortcuts on the anchor catches Esc -- '
       'mirrors folder_picker.dart)', (tester) async {

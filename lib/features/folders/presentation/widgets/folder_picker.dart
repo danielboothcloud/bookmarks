@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_spacing.dart';
+import '../../../../core/widgets/close_menu_on_escape.dart';
 import '../../application/folder_providers.dart';
 
 /// Overlay menu listing every folder (depth-indented) plus a "No folder" row
@@ -65,17 +65,10 @@ class _FolderPickerState extends ConsumerState<FolderPicker> {
     return MenuAnchor(
       alignmentOffset: const Offset(0, AppSpacing.xs),
       builder: (context, controller, _) {
-        // MenuAnchor's overlay handles Esc only when focus is inside the
-        // menu items themselves -- which only happens on keyboard-driven
-        // open. Mouse-opened menus would silently miss AC1's "Esc dismisses
-        // the picker". Catching Esc on the anchor (which holds focus after
-        // tap, see onTap below) closes that gap.
-        return CallbackShortcuts(
-          bindings: <ShortcutActivator, VoidCallback>{
-            const SingleActivator(LogicalKeyboardKey.escape): () {
-              if (controller.isOpen) controller.close();
-            },
-          },
+        // CloseMenuOnEscape: see docs/focus-model.md §4 (MenuAnchor's built-in
+        // Esc only fires when focus is in the overlay, which mouse-opens skip).
+        return CloseMenuOnEscape(
+          controller: controller,
           child: InkWell(
             focusNode: _anchorFocus,
             borderRadius: widget.anchorBorderRadius,

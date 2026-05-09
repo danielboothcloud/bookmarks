@@ -1,7 +1,3 @@
-// TODO(story-2.1): convert to @riverpod once riverpod_generator is unblocked.
-// (Same analyzer-version conflict that pins the bookmarks notifiers --
-// see bookmark_providers.dart header.)
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
@@ -213,6 +209,21 @@ class FolderNotifier extends AsyncNotifier<void> {
         // banner is wired for folder errors at MVP.
         state = AsyncValue<void>.error(error, StackTrace.current);
     }
+  }
+
+  /// Creates a new folder under [parentId] (root if null) and immediately puts
+  /// it into inline-rename mode via [pendingFolderEditIdProvider]. Used by both
+  /// the sidebar `+` button and the folder context menu's "New subfolder"
+  /// item -- the only difference between those call sites is how [parentId]
+  /// is sourced (sidebar reads `selectedFolderIdProvider`; menu uses the
+  /// closure-captured folder id). Uses the notifier's own [ref] so a
+  /// widget-tree unmount mid-await cannot dangle the rename trigger.
+  Future<String?> addFolderAndStartRename({String? parentId}) async {
+    final newId = await addFolder(parentId: parentId);
+    if (newId != null) {
+      ref.read(pendingFolderEditIdProvider.notifier).start(newId);
+    }
+    return newId;
   }
 
   /// Walks the ancestor chain starting at [candidateAncestorId]. Returns true

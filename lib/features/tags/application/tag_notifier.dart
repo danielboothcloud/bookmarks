@@ -1,5 +1,3 @@
-// TODO(story-2.5): convert to @riverpod once riverpod_generator is unblocked.
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/error/result.dart';

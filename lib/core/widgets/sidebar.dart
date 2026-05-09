@@ -125,24 +125,17 @@ class Sidebar extends ConsumerWidget {
                                   : null,
                               child: _SidebarSectionHeader(
                                 label: 'FOLDERS',
-                                onAdd: () async {
+                                onAdd: () {
                                   // Selection-aware create. Null selection
-                                  // -> root-level (Story 2.1 behaviour
-                                  // preserved). Non-null -> child of the
-                                  // selected folder; the notifier auto-
-                                  // expands the parent so the new child is
-                                  // visible (Story 2.2 Task 3).
+                                  // -> root-level. Non-null -> child of the
+                                  // selected folder (notifier auto-expands
+                                  // the parent so the new child is visible).
                                   final selectedId =
                                       ref.read(selectedFolderIdProvider);
-                                  final newId = await ref
+                                  ref
                                       .read(folderNotifierProvider.notifier)
-                                      .addFolder(parentId: selectedId);
-                                  if (newId != null) {
-                                    ref
-                                        .read(pendingFolderEditIdProvider
-                                            .notifier)
-                                        .start(newId);
-                                  }
+                                      .addFolderAndStartRename(
+                                          parentId: selectedId);
                                 },
                               ),
                             );

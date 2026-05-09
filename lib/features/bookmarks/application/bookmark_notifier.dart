@@ -1,5 +1,3 @@
-// TODO(story-1.2): replace with @riverpod AsyncNotifier once codegen unblocked.
-
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;

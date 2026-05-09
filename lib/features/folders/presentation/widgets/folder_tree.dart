@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/router/app_router.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_spacing.dart';
+import '../../../../core/widgets/close_menu_on_escape.dart';
 import '../../application/folder_notifier.dart';
 import '../../application/folder_providers.dart';
 import '../../domain/folder.dart';
@@ -429,6 +430,13 @@ class _FolderRowState extends ConsumerState<FolderRow> {
       child: InkWell(
         focusNode: _rowFocusNode,
         onTap: () {
+          // Ctrl+Click on macOS arrives here as a plain primary tap (Flutter's
+          // macOS engine doesn't always synthesize it to onSecondaryTapDown).
+          // The wrapping _FolderContextMenu's onTapDown handles the menu open;
+          // we just need to NOT also select+navigate, otherwise a Ctrl+Click
+          // both opens the menu AND swaps the active folder -- which no other
+          // macOS app does.
+          if (HardwareKeyboard.instance.isControlPressed) return;
           // Claim focus inside AppShell's Shortcuts subtree so Cmd+N / Esc
           // remain reachable after a row click. skipTraversal on _rowFocusNode
           // keeps Tab order unchanged.
@@ -734,6 +742,18 @@ class _FolderContextMenuState extends ConsumerState<_FolderContextMenu> {
   // anchored MenuAnchor manages listener subscriptions internally.
   final _menuController = MenuController();
 
+  void _toggleMenuAt(Offset localPosition) {
+    // Claim focus first so Esc / Cmd+N stay routed to AppShell's Shortcuts
+    // subtree once the menu closes -- mirrors the focus-claim discipline at
+    // _buildDisplayRowBody onTap.
+    widget.rowFocusNode.requestFocus();
+    if (_menuController.isOpen) {
+      _menuController.close();
+    } else {
+      _menuController.open(position: localPosition);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return MenuAnchor(
@@ -746,25 +766,13 @@ class _FolderContextMenuState extends ConsumerState<_FolderContextMenu> {
           child: const Text('Rename'),
         ),
         MenuItemButton(
-          onPressed: () async {
-            // Mirrors the sidebar `+` selection-aware-create handler at
-            // sidebar.dart line 128-146, except the parent is the
-            // closure-captured folder (not selectedFolderIdProvider) -- the
-            // user right-clicked THIS folder, so THIS folder is the parent.
-            // FolderNotifier.addFolder auto-expands the parent on success so
-            // the new child row is immediately visible.
-            final newId = await ref
-                .read(folderNotifierProvider.notifier)
-                .addFolder(parentId: widget.folder.id);
-            // Guard the post-await ref use: a parent collapse, navigation,
-            // or hot reload during the save can unmount this row.
-            if (!mounted) return;
-            if (newId != null) {
-              ref
-                  .read(pendingFolderEditIdProvider.notifier)
-                  .start(newId);
-            }
-          },
+          // Parent is the closure-captured folder (not selectedFolderIdProvider)
+          // -- the user right-clicked THIS folder, so THIS folder is the parent.
+          // The notifier owns the rename trigger via its own ref, so widget
+          // unmount during the await is safe (no `if (!mounted)` needed).
+          onPressed: () => ref
+              .read(folderNotifierProvider.notifier)
+              .addFolderAndStartRename(parentId: widget.folder.id),
           child: const Text('New subfolder'),
         ),
         // Visual separator between constructive and destructive actions --
@@ -777,32 +785,26 @@ class _FolderContextMenuState extends ConsumerState<_FolderContextMenu> {
           child: const Text('Delete'),
         ),
       ],
-      // CallbackShortcuts on the anchor: MenuAnchor's built-in Esc handler
-      // only fires when focus is inside the menu items, which only happens
-      // on keyboard-driven open. Mouse-driven opens leave focus on
-      // _rowFocusNode, so AC5 ("Esc closes the menu") would silently fail.
-      // Same gap-closer as folder_picker.dart line 73-78.
-      child: CallbackShortcuts(
-        bindings: <ShortcutActivator, VoidCallback>{
-          const SingleActivator(LogicalKeyboardKey.escape): () {
-            if (_menuController.isOpen) _menuController.close();
-          },
-        },
+      // CloseMenuOnEscape: see docs/focus-model.md §4 (MenuAnchor's built-in
+      // Esc only fires when focus is in the overlay, which mouse-opens skip).
+      child: CloseMenuOnEscape(
+        controller: _menuController,
         child: GestureDetector(
           // Opaque so the secondary tap is not absorbed by the InkWell child --
           // Material's InkWell does not handle secondary buttons and would
           // otherwise eat the gesture, leaving the menu unreachable.
           behavior: HitTestBehavior.opaque,
-          onSecondaryTapDown: (details) {
-            // Claim focus first so Esc / Cmd+N stay routed to AppShell's
-            // Shortcuts subtree once the menu closes -- mirrors the focus-claim
-            // discipline at _buildDisplayRowBody onTap.
-            widget.rowFocusNode.requestFocus();
-            if (_menuController.isOpen) {
-              _menuController.close();
-            } else {
-              _menuController.open(position: details.localPosition);
-            }
+          onSecondaryTapDown: (details) => _toggleMenuAt(details.localPosition),
+          // Ctrl+Click fallback for macOS: Flutter's macOS engine sometimes
+          // delivers Ctrl+Click as a primary tap with a Ctrl modifier on
+          // HardwareKeyboard rather than synthesising onSecondaryTapDown.
+          // Other apps see it as a real right-click; we have to bridge the
+          // gap ourselves. The InkWell's onTap is short-circuited by a
+          // matching modifier check (see _buildDisplayRowBody) so a single
+          // Ctrl+Click only opens the menu -- no selection / navigation.
+          onTapDown: (details) {
+            if (!HardwareKeyboard.instance.isControlPressed) return;
+            _toggleMenuAt(details.localPosition);
           },
           child: widget.child,
         ),

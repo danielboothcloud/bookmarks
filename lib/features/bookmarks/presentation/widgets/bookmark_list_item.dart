@@ -9,13 +9,12 @@ import '../../../tags/presentation/widgets/bookmark_tag_chip_row.dart';
 import '../../application/bookmark_providers.dart';
 import '../../domain/bookmark.dart';
 
-// TODO(story-1.4-narrow-detail): when the detail pane is hidden (< 900px), the
-// UX spec calls for an inline-expansion of the selected item at the bottom of
-// the row instead of a separate panel. Deferred until users report it missing.
-// At narrow widths the delete trigger (currently in the detail pane) will need
-// a separate path -- see bookmark_detail_pane.dart for the trash button + inline
-// confirmation. Story 1.5's keyboard Delete shortcut lives at app_shell.dart
-// (works regardless of focus, as long as a bookmark is selected).
+// Narrow-width (<900px) delete affordance: explicitly accepted gap.
+// The keyboard Delete shortcut works at any width (app_shell.dart). The detail
+// pane (with its trash button + inline confirmation, bookmark_detail_pane.dart)
+// is the wide-width mouse path. At narrow widths mouse users have no visible
+// affordance -- accepted because keyboard works and narrow-width usage is rare.
+// Revisit if a real user reports the gap.
 
 class BookmarkListItem extends ConsumerStatefulWidget {
   const BookmarkListItem({
@@ -65,7 +64,7 @@ class _BookmarkListItemState extends ConsumerState<BookmarkListItem> {
         child: GestureDetector(
           onDoubleTap: () => openExternal(bookmark.url),
           child: Material(
-            color: isSelected ? AppColors.surfaceHover : Colors.transparent,
+            color: isSelected ? AppColors.surfaceSelected : Colors.transparent,
             child: InkWell(
               focusNode: _focusNode,
               onTap: () {

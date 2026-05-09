@@ -10,6 +10,7 @@ abstract final class AppColors {
   static const textMuted = Color(0xFF9A9A9A);
   static const border = Color(0xFFE0DED8);
   static const surfaceHover = Color(0xFFECEAE4);
+  static const surfaceSelected = Color(0xFFEFDFD7);
 
   static const syncSynced = Color(0xFF6A9E6A);
   static const syncUnsynced = Color(0xFFC8873A);
