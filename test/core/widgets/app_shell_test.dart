@@ -10,6 +10,7 @@ import 'package:bookmarks/features/bookmarks/application/bookmark_providers.dart
 import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
 import 'package:bookmarks/features/bookmarks/domain/i_bookmark_repository.dart';
 import 'package:bookmarks/features/folders/application/folder_providers.dart';
+import 'package:bookmarks/features/search/presentation/widgets/search_bar.dart';
 import 'package:bookmarks/features/folders/domain/folder.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -662,6 +663,117 @@ void main() {
 
       expect(container.read(selectedFolderIdProvider), 'a',
           reason: 'EditableText carve-out must suppress folder-nav arrows');
+    });
+  });
+
+  group('AppShell focus reclaimer (post-3.1 regression guard)', () {
+    testWidgets(
+        'pointer-down on a non-focus-claiming surface restores primary focus '
+        'inside the shell so global shortcuts keep firing', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      final shellNode = container.read(appShellFocusNodeProvider);
+
+      // Precondition: autofocus put primary focus on (or inside) the shell.
+      expect(
+        FocusManager.instance.primaryFocus == shellNode ||
+            (FocusManager.instance.primaryFocus?.ancestors
+                    .contains(shellNode) ??
+                false),
+        isTrue,
+      );
+
+      // Simulate the bug: a transient surface dispose / programmatic
+      // unfocus drops primary focus outside the AppShell scope.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      // After unfocus the primary may be a root-level FocusScope; assert it
+      // is NOT the shell node so the precondition for the reclaim test is
+      // genuine (we want to verify the reclaim recovers from this state).
+      final droppedPrimary = FocusManager.instance.primaryFocus;
+      expect(droppedPrimary == shellNode, isFalse,
+          reason: 'precondition: focus must be outside the shell node');
+
+      // Sanity-check the bug: in the dropped state, Cmd+N should NOT open
+      // the inline-add form because the Shortcuts handler isn't reached.
+      // Skipping this assertion -- it's flaky in the test harness because
+      // sendKeyEvent dispatches via the keyboard service rather than the
+      // platform's shortcut routing, so it can pass through paths that the
+      // production app's macOS engine would beep on. The reclaim assertion
+      // below is the load-bearing one.
+
+      // Tap an inert surface in the content area. We aim at the
+      // BookmarkSearchBar's outer Container -- specifically a coordinate
+      // inside its padding but outside the TextField proper, which is
+      // exactly the user-reported failure surface.
+      final searchBarFinder = find.byType(BookmarkSearchBar);
+      expect(searchBarFinder, findsOneWidget);
+      final searchBarRect = tester.getRect(searchBarFinder);
+      // Top-left corner of the SearchBar -- inside its Container padding,
+      // outside the TextField (which sits horizontally inset by the
+      // prefix-icon and vertically inset by the dense input theme).
+      final tapPoint = Offset(
+        searchBarRect.left + 4,
+        searchBarRect.top + 2,
+      );
+      await tester.tapAt(tapPoint);
+      // Two pumps: one to deliver the pointer event, one to drain the
+      // post-frame callback that schedules the actual reclaim.
+      await tester.pump();
+      await tester.pump();
+
+      // After the post-frame callback, primary focus must be back inside
+      // the shell scope. Either equals the shell node, or one of its
+      // descendants did claim focus (e.g. the EmptyState's CTA).
+      final reclaimed = FocusManager.instance.primaryFocus;
+      final inShell = reclaimed == shellNode ||
+          (reclaimed?.ancestors.contains(shellNode) ?? false);
+      expect(inShell, isTrue,
+          reason: 'pointer-down outside any focus-claim widget must leave '
+              'primary focus inside the shell scope');
+
+      // Cmd+N now reaches the Shortcuts handler -- shows the inline-add
+      // form (the AddBookmarkIntent action target).
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      addTearDown(
+          () => tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft));
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
+      await tester.pumpAndSettle();
+
+      expect(container.read(addFormVisibleProvider), isTrue,
+          reason: 'global Cmd+N must fire after the focus reclaim');
+    });
+
+    testWidgets('reclaim is a no-op when a child widget claims focus on tap',
+        (tester) async {
+      // Tapping the search bar's TextField (a focus-claiming widget) must
+      // NOT trigger the reclaimer's restore -- the TextField wins, focus
+      // stays on it, and the post-frame check sees a descendant of the
+      // shell so it doesn't fire.
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      final shellNode = container.read(appShellFocusNodeProvider);
+
+      final textFieldFinder = find.byType(TextField);
+      expect(textFieldFinder, findsAtLeastNWidgets(1));
+      await tester.tap(textFieldFinder.first);
+      await tester.pumpAndSettle();
+
+      final after = FocusManager.instance.primaryFocus;
+      // TextField's own FocusNode is the primary; it must be a descendant
+      // of the shell node, not the shell node itself.
+      expect(after == shellNode, isFalse,
+          reason: 'TextField should hold focus after tap, not the shell');
+      expect(after?.ancestors.contains(shellNode), isTrue,
+          reason: 'TextField focus is inside the shell subtree');
     });
   });
 

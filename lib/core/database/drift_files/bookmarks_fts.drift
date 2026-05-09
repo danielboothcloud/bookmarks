@@ -1,1 +1,96 @@
--- TODO(story-3.1): FTS5 virtual table + triggers for full-text search.
+-- bookmarks_fts: FTS5 full-text-search index over `bookmarks`.
+--
+-- This file is the documented source-of-truth for the FTS5 schema and the
+-- five triggers that keep it in sync with `bookmarks` and `bookmark_tags`.
+-- The runtime DDL is executed from `app_database.dart`'s migration via
+-- `customStatement` constants in `lib/core/database/fts_schema.dart`,
+-- mirroring the `idx_tags_lower_name` precedent. The `@DriftDatabase`
+-- annotation does NOT include this file.
+--
+-- Why regular FTS5 (not external-content / contentless):
+--   * external-content (`content='bookmarks'`) requires the source table to
+--     have ALL columns named in the FTS5 schema, but `bookmarks` has no
+--     `tags` column (it's a JOIN aggregate). Story 3.1's plan favoured
+--     external-content for the `'rebuild'` convenience but ran into this
+--     constraint during dev.
+--   * contentless (`content=''`) forbids UPDATE statements on the FTS table,
+--     forcing every trigger into a delete+insert dance with no way to read
+--     the previously-indexed values.
+--   * Regular FTS5 stores indexed columns inside its own shadow tables.
+--     Cost: ~1KB per indexed bookmark (same magnitude as external-content).
+--     Wins: UPDATE-driven triggers are simple and the migration backfill is
+--     a single INSERT...SELECT.
+--
+-- Tokenizer: unicode61 with diacritic-stripping ON ('remove_diacritics 1')
+-- so "café" matches "cafe".
+--
+-- The `tags` column carries a space-separated concatenation of names of all
+-- tags currently linked through `bookmark_tags`, kept in sync by the
+-- bookmark_tags_ai / bookmark_tags_ad triggers below.
+--
+-- Notes on what is NOT here:
+--   * No `tags_au` trigger on `tags.name` updates. Tag names are immutable
+--     post-creation in the current contract (Story 2.5 / Epic 2 retro;
+--     no rename UI; tags are hard-deleted with last junction per FR16 v5).
+--     If renaming ever lands, add `tags_au AFTER UPDATE OF name` walking
+--     `bookmark_tags` and updating affected `bookmarks_fts.tags` rows.
+--   * Triggers MUST NOT touch `sync_queue` (Story 4.2 owns that table).
+--     `test/core/database/sync_queue_write_guard_test.dart` enforces this.
+
+CREATE VIRTUAL TABLE IF NOT EXISTS bookmarks_fts USING fts5(
+  title, url, notes, tags,
+  tokenize='unicode61 remove_diacritics 1'
+);
+
+-- Insert: title/url/notes from the new row; tags starts empty because
+-- junction rows are written separately.
+CREATE TRIGGER IF NOT EXISTS bookmarks_ai AFTER INSERT ON bookmarks BEGIN
+  INSERT INTO bookmarks_fts(rowid, title, url, notes, tags)
+  VALUES (new.rowid, new.title, new.url, COALESCE(new.notes, ''), '');
+END;
+
+-- Delete: drop the matching FTS row. Regular FTS5 handles index cleanup
+-- automatically when a row is deleted.
+CREATE TRIGGER IF NOT EXISTS bookmarks_ad AFTER DELETE ON bookmarks BEGIN
+  DELETE FROM bookmarks_fts WHERE rowid = old.rowid;
+END;
+
+-- Update: only fire on changes to the indexed user-mutable columns to avoid
+-- spurious rewrites on metadata-only updates (e.g. updatedAt-only writes
+-- from sync). The `tags` column is left alone -- it is owned by the
+-- bookmark_tags triggers below.
+CREATE TRIGGER IF NOT EXISTS bookmarks_au AFTER UPDATE OF title, url, notes
+ON bookmarks BEGIN
+  UPDATE bookmarks_fts
+  SET title = new.title,
+      url = new.url,
+      notes = COALESCE(new.notes, '')
+  WHERE rowid = new.rowid;
+END;
+
+-- bookmark_tags insert: refresh the tags column on the affected bookmark
+-- with the current concatenated tag-name set.
+CREATE TRIGGER IF NOT EXISTS bookmark_tags_ai AFTER INSERT ON bookmark_tags
+BEGIN
+  UPDATE bookmarks_fts
+  SET tags = COALESCE(
+    (SELECT GROUP_CONCAT(t.name, ' ')
+     FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id
+     WHERE bt.bookmark_id = new.bookmark_id),
+    '')
+  WHERE rowid = (SELECT rowid FROM bookmarks WHERE id = new.bookmark_id);
+END;
+
+-- bookmark_tags delete: same shape as ai. Post-delete the JOIN naturally
+-- returns the now-shorter set; GROUP_CONCAT on empty input is NULL, which
+-- COALESCE turns into ''.
+CREATE TRIGGER IF NOT EXISTS bookmark_tags_ad AFTER DELETE ON bookmark_tags
+BEGIN
+  UPDATE bookmarks_fts
+  SET tags = COALESCE(
+    (SELECT GROUP_CONCAT(t.name, ' ')
+     FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id
+     WHERE bt.bookmark_id = old.bookmark_id),
+    '')
+  WHERE rowid = (SELECT rowid FROM bookmarks WHERE id = old.bookmark_id);
+END;

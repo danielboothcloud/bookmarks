@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
+import 'fts_schema.dart';
 import 'tables/bookmark_tags.dart';
 import 'tables/bookmarks.dart';
 import 'tables/folders.dart';
@@ -13,6 +14,9 @@ part 'app_database.g.dart';
 // Story 1.2 added: Bookmarks, SyncQueue
 // Story 2.1 added: Folders
 // Story 2.5 added: Tags, BookmarkTags
+// Story 3.1 added: bookmarks_fts (FTS5 virtual table) + 5 sync triggers,
+//   defined in `drift_files/bookmarks_fts.drift` (documentation) and
+//   executed via customStatement from `fts_schema.dart` constants.
 
 @DriftDatabase(tables: [Bookmarks, Folders, SyncQueue, Tags, BookmarkTags])
 class AppDatabase extends _$AppDatabase {
@@ -21,7 +25,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -37,6 +41,14 @@ class AppDatabase extends _$AppDatabase {
             'CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_lower_name '
             'ON tags (lower(name))',
           );
+          // Story 3.1: FTS5 virtual table + 5 sync triggers. Order matters:
+          // `m.createAll()` must have created `bookmarks`, `bookmark_tags`,
+          // and `tags` first because the triggers reference them. The
+          // 'rebuild' step is skipped on a fresh install -- there are no
+          // rows to backfill, and the triggers are no-op on an empty table.
+          for (final stmt in kFtsCreateStatements) {
+            await customStatement(stmt);
+          }
         },
         onUpgrade: (m, from, to) async {
           // Each branch guards on `from < targetVersion` so deltas compose for
@@ -132,6 +144,29 @@ class AppDatabase extends _$AppDatabase {
               'DELETE FROM tags '
               'WHERE id NOT IN (SELECT DISTINCT tag_id FROM bookmark_tags)',
             );
+          }
+          if (from < 6) {
+            // Story 3.1: FTS5 virtual table + 5 sync triggers + backfill.
+            // Runs AFTER the v5 cleanup so the backfill indexes a clean
+            // junction/tag set (no orphan rows).
+            //
+            // Order:
+            //   1. Create the FTS table and its triggers. The triggers
+            //      reference bookmarks / bookmark_tags / tags, all created
+            //      by earlier `from < N` blocks (or m.createAll on a fresh
+            //      v6 install -- onCreate covers that path separately).
+            //   2. Backfill: INSERT...SELECT walks every row of `bookmarks`
+            //      and writes the FTS tuple in one statement. The
+            //      derived `tags` column is computed in the SELECT subquery,
+            //      so a single round-trip populates everything.
+            //
+            // Idempotence: the CREATE statements use `IF NOT EXISTS`. The
+            // backfill is gated by the `from < 6` block so it runs once;
+            // the migration test suite asserts re-execution is a no-op.
+            for (final stmt in kFtsCreateStatements) {
+              await customStatement(stmt);
+            }
+            await customStatement(kFtsBackfillStatement);
           }
         },
       );

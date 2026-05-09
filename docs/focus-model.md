@@ -99,6 +99,7 @@ Story 2.5 H1 was this exact bug. Pattern: any `Consumer*StatefulWidget` whose st
 | 7 | Folder/bookmark inline rename | `folder_tree.dart` / detail pane | yes | n/a (auto-focused on edit) | Local `Shortcuts(SingleActivator(escape): DismissIntent())` — local scope, not app scope. |
 | 8 | `FolderPicker` `MenuAnchor` | `folder_picker.dart` | yes (anchor) | yes | Reference for the `MenuAnchor` mouse-Esc fix. |
 | 9 | `_FolderContextMenu` `MenuAnchor` | `folder_tree.dart` | yes (`_rowFocusNode`) | yes (`onSecondaryTapDown`) | Same `CallbackShortcuts(escape)` idiom. |
+| 10 | `BookmarkSearchBar` `TextField` | `features/search/presentation/widgets/search_bar.dart` | yes (via `searchBarFocusNodeProvider`) | yes (`TextField` self-claim on tap) | Tab-traversal slot 2 (sidebar → search bar → content → detail). FocusNode is provider-owned so AppShell's `FocusSearchIntent` action can request focus from outside the widget tree without a GlobalKey. The State adds a focus-gain listener that positions the cursor at end-of-text in a post-frame callback. |
 
 When adding a new surface, append a row here.
 
@@ -117,6 +118,7 @@ When adding a new surface, append a row here.
 | `LongPressDraggable(delay: zero)` classifies clicks as drags | Story 2.2 | Use plain `Draggable<T>` + `ImmediateMultiDragGestureRecognizer`. |
 | `GestureDetector(onDoubleTap)` defers single-tap by ~300ms | Story 2.2 (debug log) | Don't combine `onTap` + `onDoubleTap` on focus-claiming surfaces. |
 | Test harness `MaterialApp` (no AppShell) gives different focus paths from production | Story 2.4 | Either wrap tests in a real shell or assert the local `Shortcuts` subtree directly — don't assume AppShell-style focus claiming applies. |
+| `Focus(autofocus: true)` is one-shot at mount; clicks on inert surfaces (Container padding, empty content area) leak primary focus outside the shell, breaking subsequent global shortcuts | Story 3.1 | Wrap the AppShell body in a translucent `Listener` that on `onPointerDown` schedules a post-frame reclaim onto the shell's `FocusNode` (`appShellFocusNodeProvider`) if focus ended up outside the shell subtree. Force a frame via `WidgetsBinding.instance.scheduleFrame()` because pointer events don't auto-schedule one. See `_AppShellFocusReclaimer` in `app_shell.dart`. |
 
 When a new framework gotcha is discovered, append a row here.
 

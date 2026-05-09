@@ -385,8 +385,8 @@ class BookmarkTags extends Table with TableInfo {
   bool get dontWriteConstraints => true;
 }
 
-class DatabaseAtV4 extends GeneratedDatabase {
-  DatabaseAtV4(QueryExecutor e) : super(e);
+class DatabaseAtV6 extends GeneratedDatabase {
+  DatabaseAtV6(QueryExecutor e) : super(e);
   late final Bookmarks bookmarks = Bookmarks(this);
   late final Folders folders = Folders(this);
   late final SyncQueue syncQueue = SyncQueue(this);
@@ -434,5 +434,5 @@ class DatabaseAtV4 extends GeneratedDatabase {
     idxBookmarkTagsTagId,
   ];
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 6;
 }

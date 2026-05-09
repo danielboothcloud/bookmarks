@@ -6,6 +6,9 @@ import 'package:go_router/go_router.dart';
 import '../../features/bookmarks/application/bookmark_providers.dart';
 import '../../features/bookmarks/presentation/widgets/bookmark_detail_pane.dart';
 import '../../features/folders/application/folder_providers.dart';
+import '../../features/search/application/search_providers.dart';
+import '../../features/search/presentation/widgets/search_bar.dart';
+import '../../features/search/presentation/widgets/search_results_screen.dart';
 import '../router/app_router.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
@@ -226,6 +229,20 @@ class _ToggleSelectedFolderAction
   }
 }
 
+/// Holds the FocusNode that backs AppShell's `Focus(autofocus: true)` shell
+/// scope. Lives on a Provider so the `_AppShellFocusReclaimer` can compare
+/// `FocusManager.instance.primaryFocus` against this node by identity (see
+/// `docs/focus-model.md` Hard Rule 5 + the framework-gotcha appendix entry
+/// on pointer-down focus reclaim).
+final appShellFocusNodeProvider = Provider<FocusNode>((ref) {
+  final node = FocusNode(
+    debugLabel: 'app-shell-shortcut-scope',
+    skipTraversal: true,
+  );
+  ref.onDispose(node.dispose);
+  return node;
+});
+
 class AppShell extends ConsumerWidget {
   const AppShell({required this.navigationShell, super.key});
 
@@ -285,7 +302,12 @@ class AppShell extends ConsumerWidget {
           ),
           FocusSearchIntent: CallbackAction<FocusSearchIntent>(
             onInvoke: (_) {
-              // TODO(story-3.1): focus search bar.
+              // Story 3.1: Cmd+F / Ctrl+F focuses the search bar's TextField.
+              // The SearchBar's State listens for focus-gain on this node
+              // and positions the cursor at end-of-text in the next frame
+              // (per AC1). Keeping the action body to a single requestFocus
+              // call avoids reaching into another widget's controller.
+              ref.read(searchBarFocusNodeProvider).requestFocus();
               return null;
             },
           ),
@@ -337,24 +359,25 @@ class AppShell extends ConsumerWidget {
           ),
         },
         // Fallback focus inside the Shortcuts subtree so app-level shortcuts
-        // (Delete/Backspace, Cmd+N, Esc, etc.) work even when no row, button,
-        // or text field has explicitly claimed focus. Material `InkWell`
-        // doesn't request focus on pointer taps -- only on Tab navigation --
-        // so clicking a folder or bookmark in the sidebar leaves
-        // `FocusManager.instance.primaryFocus` outside this widget's
+        // (Delete/Backspace, Cmd+N, Cmd+F, Esc, etc.) work even when no row,
+        // button, or text field has explicitly claimed focus. Material
+        // `InkWell` doesn't request focus on pointer taps -- only on Tab
+        // navigation -- so clicking a folder or bookmark in the sidebar
+        // leaves `FocusManager.instance.primaryFocus` outside this widget's
         // ancestry. Without this Focus node, key events would propagate to
         // the platform (macOS error beep) instead of the Shortcuts handler.
-        // `autofocus: true` is one-shot at mount; subsequent foci (e.g. an
-        // inline-add TextField) claim focus normally and return here on
-        // disposal via the standard FocusScope walk.
+        // `autofocus: true` is one-shot at mount; the `_AppShellFocusReclaimer`
+        // below reclaims this node on any pointer-down whose target chain
+        // didn't end up claiming focus inside the shell subtree.
         child: Focus(
+          focusNode: ref.watch(appShellFocusNodeProvider),
           autofocus: true,
-          debugLabel: 'app-shell-shortcut-scope',
           child: FocusTraversalGroup(
             policy: OrderedTraversalPolicy(),
             child: Scaffold(
             backgroundColor: AppColors.surfaceContent,
-            body: LayoutBuilder(
+            body: _AppShellFocusReclaimer(
+              child: LayoutBuilder(
               builder: (context, constraints) {
                 final width = constraints.maxWidth;
                 final showDetailPane =
@@ -370,13 +393,25 @@ class AppShell extends ConsumerWidget {
                         collapsed: collapseSidebar,
                       ),
                     ),
-                    // Search bar will slot in here as order 2 in Story 3.1.
                     Expanded(
-                      child: FocusTraversalOrder(
-                        order: const NumericFocusOrder(3),
-                        child: Container(
-                          color: AppColors.surfaceContent,
-                          child: navigationShell,
+                      child: Container(
+                        color: AppColors.surfaceContent,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const FocusTraversalOrder(
+                              order: NumericFocusOrder(2),
+                              child: BookmarkSearchBar(),
+                            ),
+                            Expanded(
+                              child: FocusTraversalOrder(
+                                order: const NumericFocusOrder(3),
+                                child: _ContentArea(
+                                  navigationShell: navigationShell,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -389,10 +424,99 @@ class AppShell extends ConsumerWidget {
                 );
               },
             ),
+            ),
           ),
           ),
         ),
       ),
     );
+  }
+}
+
+/// Pointer-down focus reclaimer for AppShell's shortcut subtree.
+///
+/// **Problem.** Per `docs/focus-model.md` Hard Rule 5, mouse clicks must
+/// claim focus on widgets that participate in shortcuts. The convention
+/// is per-widget (each focus-claiming widget calls `requestFocus()` in
+/// its `onTap`), but it leaks: clicks on widgets that have no focus
+/// handler -- Container backgrounds, padding, the SearchBar's bordered
+/// surround, an empty content area -- leave primary focus wherever it
+/// last was, which after a transient surface dispose may be outside the
+/// AppShell's `Shortcuts` subtree. Result: subsequent Cmd+N / Cmd+F /
+/// Backspace / Esc keystrokes don't reach the Shortcuts handler and the
+/// platform beeps.
+///
+/// **Fix.** A translucent [Listener] observes pointer-down events on the
+/// AppShell body without competing in the gesture arena (children's
+/// own gesture recognisers and InkWell taps win normally). After the
+/// frame in which the click was processed, if primary focus is NOT
+/// inside the AppShell shell-scope FocusNode (`appShellFocusNodeProvider`)
+/// or one of its descendants, focus is reclaimed onto the shell node.
+/// This means: focus-claiming widgets keep working unchanged; clicks
+/// on inert surfaces fall through to the reclaimer; key shortcuts keep
+/// working in either case.
+///
+/// The post-frame deferral is critical -- it lets a child's `onTap`
+/// (e.g. an InkWell or a TextField requesting focus) win when the click
+/// did land on a focus-claiming widget. We only reclaim if no widget
+/// claimed focus during the frame.
+class _AppShellFocusReclaimer extends ConsumerWidget {
+  const _AppShellFocusReclaimer({required this.child});
+
+  final Widget child;
+
+  bool _isInsideShell(FocusNode? node, FocusNode shell) {
+    if (node == null) return false;
+    if (identical(node, shell)) return true;
+    return node.ancestors.contains(shell);
+  }
+
+  void _onPointerDown(WidgetRef ref) {
+    final shell = ref.read(appShellFocusNodeProvider);
+    // Fast-path: focus is already inside the shell -- nothing to do.
+    if (_isInsideShell(FocusManager.instance.primaryFocus, shell)) {
+      return;
+    }
+    // Defer the reclaim until the gesture has fully resolved, so any
+    // child widget that claims focus on this tap (InkWell.onTap,
+    // TextField gesture recogniser, sidebar row click-to-claim) wins.
+    // The post-frame callback runs at the end of the next frame; we
+    // explicitly schedule a frame because pointer events don't auto-
+    // schedule one when the handler doesn't trigger a rebuild.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_isInsideShell(FocusManager.instance.primaryFocus, shell)) {
+        return;
+      }
+      shell.requestFocus();
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => _onPointerDown(ref),
+      child: child,
+    );
+  }
+}
+
+/// Story 3.1: swaps between the navigation shell and the search-results
+/// screen based on `searchActiveProvider`. Pulled out into its own
+/// ConsumerWidget so the rebuild on every search keystroke is scoped to
+/// the content area only -- AppShell's outer layout doesn't churn.
+class _ContentArea extends ConsumerWidget {
+  const _ContentArea({required this.navigationShell});
+
+  final StatefulNavigationShell navigationShell;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final searchActive = ref.watch(searchActiveProvider);
+    if (searchActive) {
+      return const SearchResultsScreen();
+    }
+    return navigationShell;
   }
 }
