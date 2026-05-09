@@ -10,7 +10,10 @@ import 'package:bookmarks/features/bookmarks/application/bookmark_providers.dart
 import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
 import 'package:bookmarks/features/bookmarks/domain/i_bookmark_repository.dart';
 import 'package:bookmarks/features/folders/application/folder_providers.dart';
+import 'package:bookmarks/features/search/application/search_providers.dart';
+import 'package:bookmarks/features/search/domain/i_search_repository.dart';
 import 'package:bookmarks/features/search/presentation/widgets/search_bar.dart';
+import 'package:bookmarks/features/search/presentation/widgets/search_results_screen.dart';
 import 'package:bookmarks/features/folders/domain/folder.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -38,10 +41,20 @@ class _FakeBookmarkRepository implements IBookmarkRepository {
       const Ok<void, AppError>(null);
 }
 
+/// Returns an empty result list synchronously. Sufficient for AppShell
+/// tests that need the search providers to resolve without instantiating
+/// a real database.
+class _EmptySearchRepository implements ISearchRepository {
+  @override
+  Stream<List<Bookmark>> search(String query) =>
+      Stream.value(const <Bookmark>[]);
+}
+
 Widget _buildApp({Map<String?, List<Folder>>? folderTree}) {
   return ProviderScope(
     overrides: [
       bookmarkRepositoryProvider.overrideWithValue(_FakeBookmarkRepository()),
+      searchRepositoryProvider.overrideWithValue(_EmptySearchRepository()),
       if (folderTree != null)
         folderChildrenIndexProvider.overrideWithValue(folderTree),
     ],
@@ -774,6 +787,59 @@ void main() {
           reason: 'TextField should hold focus after tap, not the shell');
       expect(after?.ancestors.contains(shellNode), isTrue,
           reason: 'TextField focus is inside the shell subtree');
+    });
+  });
+
+  group('AppShell content-area swap (Story 3.1)', () {
+    testWidgets(
+        'empty query: navigationShell renders, SearchResultsScreen absent',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(BookmarkSearchBar), findsOneWidget);
+      expect(find.byType(SearchResultsScreen), findsNothing);
+    });
+
+    testWidgets(
+        'non-empty query: SearchResultsScreen swaps in inside the real '
+        'AppShell content area', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+          tester.element(find.byType(BookmarkSearchBar)));
+
+      container.read(searchQueryProvider.notifier).set('flutter');
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SearchResultsScreen), findsOneWidget,
+          reason: 'production AppShell._ContentArea must swap to '
+              'SearchResultsScreen when searchActiveProvider flips true');
+
+      // And clearing restores the navigationShell side of the swap.
+      container.read(searchQueryProvider.notifier).clear();
+      await tester.pumpAndSettle();
+      expect(find.byType(SearchResultsScreen), findsNothing);
+    });
+
+    testWidgets('whitespace-only query does NOT trigger the swap',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+          tester.element(find.byType(BookmarkSearchBar)));
+
+      container.read(searchQueryProvider.notifier).set('   ');
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SearchResultsScreen), findsNothing,
+          reason: 'searchActiveProvider trims; whitespace-only must remain '
+              'inactive so the navigationShell stays mounted');
     });
   });
 

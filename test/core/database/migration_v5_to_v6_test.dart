@@ -218,8 +218,13 @@ void main() {
     await db.close();
   });
 
-  test('v5 -> v6 backfill is idempotent: replay leaves FTS row count unchanged',
-      () async {
+  test('clean-replay path: DELETE + create-IF-NOT-EXISTS + backfill restores '
+      'the FTS table to its pre-replay state', () async {
+    // This is the documented force-rebuild recipe (corruption recovery,
+    // schema-tooling repair). It is NOT a claim that `kFtsBackfillStatement`
+    // is idempotent on its own -- the live migration is gated by `from < 6`
+    // so replay never happens in normal operation; the statement does not
+    // protect itself against double-INSERT (see the test below).
     final schema = await verifier.schemaAt(5);
     schema.rawDatabase.execute(
       'INSERT INTO bookmarks (id, url, title, notes, folder_id, '
@@ -240,12 +245,6 @@ void main() {
         .getSingle();
     expect(beforeReplay.read<int>('n'), 1);
 
-    // Replay the migration block manually -- defends against a future
-    // migration-replay bug. The CREATE statements use IF NOT EXISTS, and
-    // the backfill is idempotent under our test because we delete the FTS
-    // rows first to simulate a clean replay (the live migration is gated
-    // by `from < 6` which prevents replay in normal operation; this test
-    // exercises the inner statements directly).
     await db.customStatement('DELETE FROM bookmarks_fts');
     for (final stmt in kFtsCreateStatements) {
       await db.customStatement(stmt);
@@ -259,6 +258,48 @@ void main() {
         )
         .getSingle();
     expect(afterReplay.read<int>('n'), 1);
+
+    await db.close();
+  });
+
+  test('backfill statement is NOT self-idempotent: re-running without DELETE '
+      'throws a constraint failure (locks in the contract)', () async {
+    // Pinning behaviour so a future change can't silently make this
+    // statement idempotent without also revisiting the migration gate
+    // and the documented force-rebuild recipe in `fts_schema.dart`.
+    // The fail-loud throw is preferable to silently duplicating rows --
+    // any caller that wants idempotence has to opt in via DELETE first.
+    final schema = await verifier.schemaAt(5);
+    schema.rawDatabase.execute(
+      'INSERT INTO bookmarks (id, url, title, notes, folder_id, '
+      'favicon_base64, created_at, updated_at) '
+      "VALUES ('bm-x', 'https://e.com', 'Topic X', NULL, NULL, NULL, 1, 1)",
+    );
+
+    final db = AppDatabase.forTesting(schema.newConnection());
+    await db
+        .customSelect('SELECT 1', variables: <Variable<Object>>[])
+        .getSingle();
+
+    expect(
+      (await db
+              .customSelect(
+                'SELECT COUNT(*) AS n FROM bookmarks_fts',
+                variables: <Variable<Object>>[],
+              )
+              .getSingle())
+          .read<int>('n'),
+      1,
+    );
+
+    // Re-running without first DELETE-ing the rows throws on the rowid
+    // constraint -- proves the statement is not self-idempotent.
+    expect(
+      () async => db.customStatement(kFtsBackfillStatement),
+      throwsA(isA<Object>()),
+      reason: 'kFtsBackfillStatement is not self-idempotent; '
+          'force-rebuild paths must DELETE FROM bookmarks_fts first',
+    );
 
     await db.close();
   });

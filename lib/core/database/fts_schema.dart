@@ -101,11 +101,16 @@ END
 
 /// Backfill statement run during the v5 -> v6 upgrade. Walks `bookmarks`
 /// and computes the (title, url, notes, tags) tuple for every existing
-/// row in a single INSERT...SELECT. Idempotent on re-run because the FTS
-/// row is keyed on `rowid` and INSERT OR IGNORE is implicit when the
-/// migration block is gated by `from < 6` (replay during a clean upgrade
-/// is what the gate prevents). For pure replay safety the test suite
-/// asserts the FTS row count is unchanged after a re-run.
+/// row in a single INSERT...SELECT.
+///
+/// **Not self-idempotent.** Running this statement twice against a
+/// populated FTS5 table throws on the rowid uniqueness constraint
+/// (verified by the migration test suite). The statement is safe under
+/// normal operation only because it lives inside the `from < 6`
+/// migration gate -- the gate is what prevents replay, not any quality
+/// of the SQL itself. Force-rebuild paths (corruption recovery, schema
+/// repair tooling) must `DELETE FROM bookmarks_fts` first; the
+/// `clean-replay path` migration test exercises that recipe.
 const String kFtsBackfillStatement = '''
 INSERT INTO bookmarks_fts(rowid, title, url, notes, tags)
 SELECT b.rowid,

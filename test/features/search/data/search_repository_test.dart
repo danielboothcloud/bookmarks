@@ -137,17 +137,19 @@ void main() {
     expect(results.map((b) => b.id).toList(), ['bm-1']);
   });
 
-  test('URL host match: searching the host token finds the bookmark',
+  test('URL host match: typing the dotted host returns the bookmark',
       () async {
     // unicode61 splits on `.` so the host "docs.flutter.dev" indexes the
-    // tokens "docs", "flutter", "dev" -- a search for any of them hits.
+    // tokens "docs", "flutter", "dev". The sanitiser must replace `.`
+    // with a space at query time too (FTS5's query parser would otherwise
+    // error on the literal dot) so a user typing the full host hits.
     await bookmarkRepo.save(mkBookmark(
       id: 'bm-1',
       title: 'API reference',
       url: 'https://docs.flutter.dev/widgets',
     ));
 
-    final results = await firstResults('docs');
+    final results = await firstResults('docs.flutter.dev');
     expect(results.map((b) => b.id).toList(), ['bm-1']);
   });
 
@@ -201,6 +203,45 @@ void main() {
 
     expect(await firstResults('"""'), isEmpty);
     expect(await firstResults('()'), isEmpty);
+  });
+
+  test(
+      'natural-input punctuation never throws: dot / comma / slash / '
+      'apostrophe / etc. all get sanitised', () async {
+    // Real-world queries the user is likely to type. None of these may
+    // surface as a SQLite syntax error -- the sanitiser must keep the
+    // search bar a free-text input, not an FTS5 query-language input.
+    await bookmarkRepo.save(mkBookmark(
+      id: 'flutter',
+      title: 'Flutter',
+      url: 'https://flutter.dev',
+      notes: 'Cross-platform UI toolkit',
+    ));
+
+    const queries = <String>[
+      'dart.dev', // single dot (URL host)
+      'docs.flutter.dev', // multiple dots
+      'hello, world', // comma
+      'a/b/c', // slashes
+      "it's", // apostrophe
+      'a?b', // question mark
+      'a=b&c=d', // URL-style equals + ampersand
+      'hash#anchor', // hash
+      '20% off', // percent
+      'a;b', // semicolon
+      'flutter ', // trailing whitespace (no-op + strip)
+      ' flutter', // leading whitespace
+    ];
+
+    for (final q in queries) {
+      // Any throw here would surface as test failure -- the contract is
+      // that no natural input crashes the query.
+      final results = await firstResults(q);
+      // We don't assert on result content (some are empty by design);
+      // the load-bearing assertion is that no exception was thrown.
+      expect(results, isA<List<Bookmark>>(),
+          reason: 'query "$q" should not throw');
+    }
   });
 
   test('real-time re-emission: stream emits when a new matching bookmark '

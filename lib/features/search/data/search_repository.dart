@@ -21,11 +21,13 @@ class SearchRepository implements ISearchRepository {
     // relevance ties so equal-scored results have a predictable order.
     //
     // readsFrom: the FTS table is a virtual table that doesn't appear in
-    // Drift's table set, so Drift can't auto-track changes to it. Listing
-    // the SOURCE tables (bookmarks, bookmark_tags, tags) tells the stream
-    // to invalidate on any underlying mutation -- the FTS5 sync triggers
-    // ensure those mutations have already propagated to the index by the
-    // time the stream re-runs the query.
+    // Drift's table set (and Drift can't observe virtual tables anyway),
+    // so it deliberately is NOT included here. Listing the SOURCE tables
+    // (bookmarks, bookmark_tags, tags) tells the stream to invalidate on
+    // any underlying mutation -- the FTS5 sync triggers ensure those
+    // mutations have already propagated to the index by the time the
+    // stream re-runs the query. Do not "fix" this by adding `bookmarks_fts`
+    // to readsFrom; it has no effect and is misleading.
     return _db
         .customSelect(
           'SELECT b.* FROM bookmarks b '
@@ -56,14 +58,25 @@ class SearchRepository implements ISearchRepository {
 
   /// Sanitises [userQuery] into an FTS5 MATCH expression with prefix
   /// matching on every token. Returns the empty string for queries that
-  /// reduce to zero usable tokens (empty / whitespace-only / FTS5
-  /// special-character-only).
+  /// reduce to zero usable tokens (empty / whitespace-only / a query
+  /// composed only of non-token characters).
   ///
   /// We do NOT expose FTS5's query language to the user -- the search bar
-  /// is a free-text input. Operator characters are stripped so a user
-  /// typing `c++` or `(quick)` doesn't trigger an FTS5 syntax error.
+  /// is a free-text input. The FTS5 query parser only accepts barewords
+  /// composed of letters, digits, underscores, or characters above U+007F
+  /// (per the SQLite `fts5IsBareword` rule); the named query operators
+  /// (`" * : ( ) ^ + - ~`) are reserved syntax; every other ASCII
+  /// punctuation character (`. , / ? = & ' # %` …) is rejected outright
+  /// and would surface as `fts5: syntax error near "X"`.
+  ///
+  /// To shield the user from all of those failure modes we use a
+  /// whitelist: keep Unicode letters, digits, underscore, and whitespace;
+  /// replace everything else with a single space so it acts purely as a
+  /// token boundary. A query like `dart.dev` becomes `dart dev` -> tokens
+  /// `dart*`, `dev*`; `c++` becomes `c` -> token `c*`; `it's wonderful`
+  /// becomes `it s wonderful` -> three prefix tokens; `https://x.y` -> `x y`.
   static String _toMatchQuery(String userQuery) {
-    final cleaned = userQuery.replaceAll(_ftsSpecialChars, ' ');
+    final cleaned = userQuery.replaceAll(_nonTokenChars, ' ');
     final tokens = cleaned
         .split(_whitespace)
         .where((t) => t.isNotEmpty)
@@ -72,7 +85,11 @@ class SearchRepository implements ISearchRepository {
     return tokens.join(' ');
   }
 
-  // FTS5 query-language operator characters; stripped before tokenisation.
-  static final RegExp _ftsSpecialChars = RegExp(r'["*:()^+\-~]');
+  // Whitelist complement: anything that is NOT a Unicode letter / digit /
+  // underscore / whitespace. Replaced with a space (token break) before
+  // tokenisation. This covers FTS5 operator characters AND every other
+  // punctuation character that would otherwise crash the FTS5 parser.
+  static final RegExp _nonTokenChars =
+      RegExp(r'[^\p{L}\p{N}_\s]', unicode: true);
   static final RegExp _whitespace = RegExp(r'\s+');
 }
