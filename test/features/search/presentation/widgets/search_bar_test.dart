@@ -40,7 +40,11 @@ class _FakeBookmarkRepository implements IBookmarkRepository {
 /// widget test.
 class _EmptySearchRepository implements ISearchRepository {
   @override
-  Stream<List<Bookmark>> search(String query) =>
+  Stream<List<Bookmark>> search(
+    String query, {
+    Set<String>? folderIds,
+    String? tagId,
+  }) =>
       Stream.value(const <Bookmark>[]);
 }
 
@@ -233,7 +237,7 @@ void main() {
               'edit text, not prompt a delete');
     });
 
-    testWidgets('Esc in search field is a no-op in 3.1 (does NOT clear)',
+    testWidgets('Esc in search field clears the query (Story 3.2)',
         (tester) async {
       await tester.binding.setSurfaceSize(const Size(1200, 800));
       await tester.pumpWidget(_buildApp(tester));
@@ -251,8 +255,147 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
 
-      // Story 3.2 will wire Esc to clear; for 3.1 the query persists.
+      // Story 3.2 AC3: Esc dispatches through AppShell's AppDismissIntent
+      // cascade, which clears the active search query.
+      expect(container.read(searchQueryProvider), '');
+    });
+  });
+
+  // ===== Story 3.2: Esc keeps focus, clear button, controller resync =====
+
+  group('BookmarkSearchBar Story 3.2', () {
+    testWidgets('Esc clears the controller text in lockstep with the provider',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(tester));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+          tester.element(find.byType(BookmarkSearchBar)));
+
+      await tester.tap(find.byType(TextField).first);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, 'flutter');
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+
+      expect(container.read(searchQueryProvider), '');
+      final textField = tester.widget<TextField>(find.byType(TextField).first);
+      expect(textField.controller?.text, '');
+    });
+
+    testWidgets('Esc keeps focus on the search bar (AC3 contract)',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(tester));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+          tester.element(find.byType(BookmarkSearchBar)));
+
+      await tester.tap(find.byType(TextField).first);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, 'flutter');
+      await tester.pumpAndSettle();
+
+      final node = container.read(searchBarFocusNodeProvider);
+      expect(node.hasFocus, isTrue,
+          reason: 'precondition: typing into the field gave it focus');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+
+      // AC3 load-bearing assertion: focus stays on the search bar after Esc
+      // so the next REAL keystroke types a new query without an extra click.
+      // The post-frame requestFocus in AppShell's search-clear branch
+      // restores focus that Flutter's default DismissAction would otherwise
+      // strip.
+      expect(container.read(searchQueryProvider), '');
+      expect(node.hasFocus, isTrue,
+          reason: 'AC3: focus must stay on the search bar across Esc');
+    });
+
+    testWidgets('clear button is hidden when the query is empty',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(tester));
+      await tester.pumpAndSettle();
+
+      // Search bar's TextField is the first TextField in the app; the close
+      // icon must not be present in its subtree when the query is empty.
+      expect(
+          find.descendant(
+              of: find.byType(BookmarkSearchBar),
+              matching: find.byIcon(Icons.close)),
+          findsNothing);
+    });
+
+    testWidgets('clear button appears once a non-whitespace query is entered',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(tester));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(TextField).first);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, 'f');
+      await tester.pumpAndSettle();
+
+      expect(
+          find.descendant(
+              of: find.byType(BookmarkSearchBar),
+              matching: find.byIcon(Icons.close)),
+          findsOneWidget);
+    });
+
+    testWidgets('tapping the clear button clears the query and the controller',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(tester));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+          tester.element(find.byType(BookmarkSearchBar)));
+
+      await tester.tap(find.byType(TextField).first);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, 'flutter');
+      await tester.pumpAndSettle();
       expect(container.read(searchQueryProvider), 'flutter');
+
+      await tester.tap(find.descendant(
+          of: find.byType(BookmarkSearchBar),
+          matching: find.byIcon(Icons.close)));
+      await tester.pumpAndSettle();
+
+      expect(container.read(searchQueryProvider), '');
+      final textField = tester.widget<TextField>(find.byType(TextField).first);
+      expect(textField.controller?.text, '');
+    });
+
+    testWidgets('controller resyncs when the provider is cleared externally',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(tester));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+          tester.element(find.byType(BookmarkSearchBar)));
+
+      await tester.tap(find.byType(TextField).first);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, 'flutter');
+      await tester.pumpAndSettle();
+
+      // External writer (mimics AppShell's Esc cascade or any future
+      // programmatic clear).
+      container.read(searchQueryProvider.notifier).clear();
+      await tester.pumpAndSettle();
+
+      final textField = tester.widget<TextField>(find.byType(TextField).first);
+      expect(textField.controller?.text, '');
     });
   });
 

@@ -82,7 +82,20 @@ class _BookmarkSearchBarState extends ConsumerState<BookmarkSearchBar> {
   Widget build(BuildContext context) {
     final focusNode = ref.watch(searchBarFocusNodeProvider);
     _attachFocusListener(focusNode);
+    final searchActive = ref.watch(searchActiveProvider);
     final textTheme = Theme.of(context).textTheme;
+
+    // Reverse-binding: provider → controller. The clear button (this widget)
+    // and AppShell's Esc cascade both write to searchQueryProvider; this
+    // listen propagates those external writes back to the visible field.
+    // The early-return guard prevents a feedback loop with onChanged
+    // (which writes the same value back to the provider).
+    ref.listen<String>(searchQueryProvider, (_, next) {
+      if (_controller.text == next) return;
+      _controller.text = next;
+      _controller.selection =
+          TextSelection.collapsed(offset: _controller.text.length);
+    });
 
     return Container(
       padding: const EdgeInsets.symmetric(
@@ -110,6 +123,17 @@ class _BookmarkSearchBarState extends ConsumerState<BookmarkSearchBar> {
           ),
           prefixIconConstraints:
               const BoxConstraints(minWidth: 28, minHeight: 28),
+          suffixIcon: searchActive
+              ? IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  color: AppColors.textMuted,
+                  tooltip: 'Clear search',
+                  splashRadius: 16,
+                  onPressed: () {
+                    ref.read(searchQueryProvider.notifier).clear();
+                  },
+                )
+              : null,
         ),
         style: textTheme.bodyMedium?.copyWith(color: AppColors.textBody),
         onChanged: (value) {

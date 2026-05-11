@@ -46,7 +46,11 @@ class _FakeBookmarkRepository implements IBookmarkRepository {
 /// a real database.
 class _EmptySearchRepository implements ISearchRepository {
   @override
-  Stream<List<Bookmark>> search(String query) =>
+  Stream<List<Bookmark>> search(
+    String query, {
+    Set<String>? folderIds,
+    String? tagId,
+  }) =>
       Stream.value(const <Bookmark>[]);
 }
 
@@ -840,6 +844,120 @@ void main() {
       expect(find.byType(SearchResultsScreen), findsNothing,
           reason: 'searchActiveProvider trims; whitespace-only must remain '
               'inactive so the navigationShell stays mounted');
+    });
+  });
+
+  group('AppShell AppDismissIntent cascade (Story 3.2)', () {
+    testWidgets('AppDismissIntent clears active search before selection',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+
+      container
+          .read(selectedBookmarkIdProvider.notifier)
+          .select('bm-x');
+      container.read(searchQueryProvider.notifier).set('flutter');
+      await tester.pumpAndSettle();
+
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(searchQueryProvider), '');
+      expect(container.read(selectedBookmarkIdProvider), 'bm-x',
+          reason: 'search-clear sits ABOVE selection-clear in the cascade');
+    });
+
+    testWidgets('two AppDismissIntents clear search then selection',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+
+      container
+          .read(selectedBookmarkIdProvider.notifier)
+          .select('bm-x');
+      container.read(searchQueryProvider.notifier).set('flutter');
+      await tester.pumpAndSettle();
+
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(searchQueryProvider), '');
+      expect(container.read(selectedBookmarkIdProvider), isNull);
+    });
+
+    testWidgets('AppDismissIntent dismisses pending bookmark-delete '
+        'BEFORE search', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+
+      container.read(pendingDeleteIdProvider.notifier).prompt('bm-x');
+      container.read(searchQueryProvider.notifier).set('flutter');
+      await tester.pumpAndSettle();
+
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(pendingDeleteIdProvider), isNull,
+          reason: 'pending-delete confirmation must dismiss first');
+      expect(container.read(searchQueryProvider), 'flutter',
+          reason: 'search remains active after the higher-priority dismiss');
+    });
+
+    testWidgets('AppDismissIntent dismisses inline-add form BEFORE search',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+
+      container.read(addFormVisibleProvider.notifier).show();
+      container.read(searchQueryProvider.notifier).set('flutter');
+      await tester.pumpAndSettle();
+
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(addFormVisibleProvider), isFalse);
+      expect(container.read(searchQueryProvider), 'flutter');
+    });
+
+    testWidgets('AppDismissIntent with no active surfaces is a no-op',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp());
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+
+      expect(container.read(searchQueryProvider), '');
+      expect(container.read(selectedBookmarkIdProvider), isNull);
+      expect(container.read(pendingDeleteIdProvider), isNull);
+      expect(container.read(addFormVisibleProvider), isFalse);
+
+      Actions.invoke(ctx, const AppDismissIntent());
+      await tester.pumpAndSettle();
+
+      expect(container.read(searchQueryProvider), '');
+      expect(container.read(selectedBookmarkIdProvider), isNull);
+      expect(container.read(pendingDeleteIdProvider), isNull);
+      expect(container.read(addFormVisibleProvider), isFalse);
     });
   });
 

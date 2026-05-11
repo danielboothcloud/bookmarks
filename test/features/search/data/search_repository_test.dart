@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:bookmarks/core/database/app_database.dart';
 import 'package:bookmarks/features/bookmarks/data/bookmark_repository.dart';
 import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
+import 'package:bookmarks/features/folders/data/folder_repository.dart';
+import 'package:bookmarks/features/folders/domain/folder.dart';
 import 'package:bookmarks/features/search/data/search_repository.dart';
 import 'package:bookmarks/features/tags/data/tag_repository.dart';
 import 'package:bookmarks/features/tags/domain/tag.dart';
@@ -291,5 +293,223 @@ void main() {
 
     await completer.future.timeout(const Duration(seconds: 2));
     expect(emissions.last.map((b) => b.id).toList(), ['bm-1']);
+  });
+
+  // ===== Story 3.2: folder + tag scoping =====
+
+  group('folder scoping (Story 3.2 AC5)', () {
+    late FolderRepository folderRepo;
+
+    setUp(() {
+      folderRepo = FolderRepository(db);
+    });
+
+    Future<Folder> mkFolder(String id, {String? parentId}) async {
+      final now = DateTime.now();
+      final f = Folder(
+        id: id,
+        name: id,
+        parentId: parentId,
+        createdAt: now,
+        updatedAt: now,
+      );
+      await folderRepo.save(f);
+      return f;
+    }
+
+    Future<void> mkBookmarkInFolder(
+      String id,
+      String? folderId,
+      String title,
+    ) async {
+      await bookmarkRepo.save(mkBookmark(
+        id: id,
+        title: title,
+      ).copyWith(folderId: folderId));
+    }
+
+    test('single folder, no descendants: only that folder\'s matches return',
+        () async {
+      await mkFolder('A');
+      await mkFolder('B');
+      await mkBookmarkInFolder('bm-a', 'A', 'Flutter docs');
+      await mkBookmarkInFolder('bm-b', 'B', 'Flutter widgets');
+
+      final results = await searchRepo
+          .search('flutter', folderIds: {'A'}).first;
+      expect(results.map((b) => b.id).toSet(), {'bm-a'});
+    });
+
+    test('parent + descendants: scope set covers nested folders', () async {
+      await mkFolder('A');
+      await mkFolder('B', parentId: 'A');
+      await mkFolder('C', parentId: 'B');
+      await mkBookmarkInFolder('bm-a', 'A', 'Flutter at A');
+      await mkBookmarkInFolder('bm-b', 'B', 'Flutter at B');
+      await mkBookmarkInFolder('bm-c', 'C', 'Flutter at C');
+      await mkBookmarkInFolder('bm-d', null, 'Flutter at root');
+
+      final results = await searchRepo
+          .search('flutter', folderIds: {'A', 'B', 'C'}).first;
+      expect(results.map((b) => b.id).toSet(),
+          {'bm-a', 'bm-b', 'bm-c'});
+    });
+
+    test('empty folderIds set behaves like the unscoped baseline', () async {
+      await mkFolder('A');
+      await mkFolder('B');
+      await mkBookmarkInFolder('bm-a', 'A', 'Flutter docs');
+      await mkBookmarkInFolder('bm-b', 'B', 'Flutter widgets');
+
+      final results =
+          await searchRepo.search('flutter', folderIds: <String>{}).first;
+      final unscoped = await searchRepo.search('flutter').first;
+      expect(results.map((b) => b.id).toSet(),
+          unscoped.map((b) => b.id).toSet());
+    });
+
+    test('null folderIds is the same as unscoped', () async {
+      await mkFolder('A');
+      await mkBookmarkInFolder('bm-a', 'A', 'Flutter docs');
+
+      final results = await searchRepo.search('flutter', folderIds: null).first;
+      expect(results.map((b) => b.id).toSet(), {'bm-a'});
+    });
+
+    test('BM25 ordering preserved within scope', () async {
+      await mkFolder('A');
+      // Bookmark whose title is exactly the term — high BM25 relevance.
+      await mkBookmarkInFolder('bm-exact', 'A', 'Flutter');
+      // Bookmark whose only mention is via notes (lower relevance).
+      final now = DateTime.now();
+      await bookmarkRepo.save(Bookmark(
+        id: 'bm-notes',
+        url: 'https://example.com',
+        title: 'Notes',
+        folderId: 'A',
+        notes: 'Some flutter content here',
+        createdAt: now.subtract(const Duration(seconds: 1)),
+        updatedAt: now.subtract(const Duration(seconds: 1)),
+      ));
+
+      final results = await searchRepo
+          .search('flutter', folderIds: {'A'}).first;
+      expect(results.first.id, 'bm-exact');
+    });
+
+    test('real-time re-emission under scope: inserting a matching bookmark '
+        'in the scoped folder updates the stream; inserting outside it '
+        'does not surface in the scoped result set', () async {
+      await mkFolder('A');
+      await mkFolder('B');
+
+      final stream = searchRepo.search('flutter', folderIds: {'A'});
+      final emissions = <List<Bookmark>>[];
+      final sawMatch = Completer<void>();
+      final sub = stream.listen((event) {
+        emissions.add(event);
+        if (event.any((b) => b.id == 'bm-in-scope')) {
+          if (!sawMatch.isCompleted) sawMatch.complete();
+        }
+      });
+      addTearDown(sub.cancel);
+
+      // First emission: empty (no bookmarks yet).
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(emissions, isNotEmpty);
+
+      // In-scope insert -> stream re-emits with the new bookmark.
+      await mkBookmarkInFolder('bm-in-scope', 'A', 'Flutter docs');
+      await sawMatch.future.timeout(const Duration(seconds: 2));
+      expect(emissions.last.map((b) => b.id).toList(), ['bm-in-scope']);
+
+      // Out-of-scope insert -> bookmark_tags/bookmarks readsFrom set still
+      // fires invalidation (the stream re-runs), but the WHERE clause
+      // filters the row out, so it must NOT appear in the scoped results.
+      final beforeOutOfScope = emissions.length;
+      await mkBookmarkInFolder('bm-out-of-scope', 'B', 'Flutter widgets');
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      // Either no re-emission happened, or any that did still contains only
+      // the in-scope bookmark. Both shapes satisfy the scoped contract.
+      if (emissions.length > beforeOutOfScope) {
+        expect(emissions.last.map((b) => b.id).toSet(), {'bm-in-scope'},
+            reason: 'out-of-scope insert must not leak into the scoped set');
+      }
+    });
+  });
+
+  group('tag scoping (Story 3.2 AC6)', () {
+    test('single tag: only bookmarks linked to that tag match', () async {
+      await bookmarkRepo.save(mkBookmark(id: 'bm-x1', title: 'Flutter X1'));
+      await bookmarkRepo.save(mkBookmark(id: 'bm-x2', title: 'Flutter X2'));
+      await bookmarkRepo.save(mkBookmark(id: 'bm-y1', title: 'Flutter Y1'));
+
+      final tagXResult = await tagRepo.upsertByName('x');
+      final tagX = (tagXResult as dynamic).value as Tag;
+      final tagYResult = await tagRepo.upsertByName('y');
+      final tagY = (tagYResult as dynamic).value as Tag;
+      await tagRepo.linkBookmarkTag('bm-x1', tagX.id);
+      await tagRepo.linkBookmarkTag('bm-x2', tagX.id);
+      await tagRepo.linkBookmarkTag('bm-y1', tagY.id);
+
+      final results =
+          await searchRepo.search('flutter', tagId: tagX.id).first;
+      expect(results.map((b) => b.id).toSet(), {'bm-x1', 'bm-x2'});
+    });
+
+    test('bookmark with multiple tags is returned exactly once', () async {
+      await bookmarkRepo.save(mkBookmark(id: 'bm-1', title: 'Flutter docs'));
+
+      final tagAResult = await tagRepo.upsertByName('a');
+      final tagA = (tagAResult as dynamic).value as Tag;
+      final tagBResult = await tagRepo.upsertByName('b');
+      final tagB = (tagBResult as dynamic).value as Tag;
+      await tagRepo.linkBookmarkTag('bm-1', tagA.id);
+      await tagRepo.linkBookmarkTag('bm-1', tagB.id);
+
+      final results =
+          await searchRepo.search('flutter', tagId: tagA.id).first;
+      expect(results.map((b) => b.id).toList(), ['bm-1'],
+          reason: 'EXISTS subquery (not JOIN) avoids duplicate rows');
+    });
+
+    test('null tagId is the same as unscoped', () async {
+      await bookmarkRepo.save(mkBookmark(id: 'bm-1', title: 'Flutter docs'));
+      final results = await searchRepo.search('flutter', tagId: null).first;
+      expect(results.map((b) => b.id).toList(), ['bm-1']);
+    });
+  });
+
+  group('combined scoping defensive behaviour', () {
+    test('both folderIds and tagId are AND-combined (defensive)', () async {
+      // searchScopeProvider never produces this state, but the SQL must be
+      // sane if it ever happens.
+      final folderRepo = FolderRepository(db);
+      final now = DateTime.now();
+      await folderRepo.save(Folder(
+        id: 'A',
+        name: 'A',
+        createdAt: now,
+        updatedAt: now,
+      ));
+      await bookmarkRepo.save(
+          mkBookmark(id: 'bm-a-tagged', title: 'Flutter')
+              .copyWith(folderId: 'A'));
+      await bookmarkRepo.save(
+          mkBookmark(id: 'bm-a-untagged', title: 'Flutter')
+              .copyWith(folderId: 'A'));
+      await bookmarkRepo.save(
+          mkBookmark(id: 'bm-other-tagged', title: 'Flutter'));
+
+      final tagResult = await tagRepo.upsertByName('hot');
+      final tag = (tagResult as dynamic).value as Tag;
+      await tagRepo.linkBookmarkTag('bm-a-tagged', tag.id);
+      await tagRepo.linkBookmarkTag('bm-other-tagged', tag.id);
+
+      final results = await searchRepo
+          .search('flutter', folderIds: {'A'}, tagId: tag.id)
+          .first;
+      expect(results.map((b) => b.id).toSet(), {'bm-a-tagged'});
+    });
   });
 }

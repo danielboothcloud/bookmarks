@@ -342,6 +342,26 @@ class AppShell extends ConsumerWidget {
                 ref.read(addFormVisibleProvider.notifier).hide();
                 return null;
               }
+              // Story 3.2: active search clears before selection. A query
+              // is the user's current intent; a residual selection is
+              // incidental. The reverse-binding in BookmarkSearchBar
+              // resyncs the visible TextField; the _ContentArea swap
+              // reverts to navigationShell automatically.
+              //
+              // AC3 requires focus to STAY on the search field after Esc so
+              // the next keystroke types a new query. Some part of Flutter's
+              // default key pipeline (WidgetsApp DismissAction / EditableText
+              // internals) unfocuses on Esc even after our cascade consumes
+              // the event; re-requesting focus post-frame restores the
+              // user-facing contract regardless of root cause.
+              if (ref.read(searchActiveProvider)) {
+                ref.read(searchQueryProvider.notifier).clear();
+                final searchNode = ref.read(searchBarFocusNodeProvider);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (searchNode.canRequestFocus) searchNode.requestFocus();
+                });
+                return null;
+              }
               if (ref.read(selectedBookmarkIdProvider) != null) {
                 // Clear selection only -- do NOT call primaryFocus.unfocus().
                 // Unfocusing here moved focus to a dead scope and broke

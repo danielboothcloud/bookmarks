@@ -3,6 +3,7 @@ import 'package:drift/drift.dart';
 import '../../../core/database/app_database.dart';
 import '../../bookmarks/domain/bookmark.dart';
 import '../domain/i_search_repository.dart';
+import '../domain/search_tokenizer.dart';
 
 class SearchRepository implements ISearchRepository {
   SearchRepository(this._db);
@@ -10,7 +11,11 @@ class SearchRepository implements ISearchRepository {
   final AppDatabase _db;
 
   @override
-  Stream<List<Bookmark>> search(String query) {
+  Stream<List<Bookmark>> search(
+    String query, {
+    Set<String>? folderIds,
+    String? tagId,
+  }) {
     final matchString = _toMatchQuery(query);
     if (matchString.isEmpty) {
       return Stream.value(const <Bookmark>[]);
@@ -28,13 +33,36 @@ class SearchRepository implements ISearchRepository {
     // mutations have already propagated to the index by the time the
     // stream re-runs the query. Do not "fix" this by adding `bookmarks_fts`
     // to readsFrom; it has no effect and is misleading.
+    final whereClauses = <String>['bookmarks_fts MATCH ?'];
+    final variables = <Variable<Object>>[Variable<String>(matchString)];
+
+    // Folder scope (Story 3.2 AC5): empty/null is no-op; non-empty restricts
+    // to bookmarks whose folder_id is in the provided descendant set.
+    if (folderIds != null && folderIds.isNotEmpty) {
+      final placeholders = List.filled(folderIds.length, '?').join(', ');
+      whereClauses.add('b.folder_id IN ($placeholders)');
+      variables.addAll(folderIds.map(Variable<String>.new));
+    }
+
+    // Tag scope (Story 3.2 AC6): EXISTS subquery returns each `b.*` row at
+    // most once even if a future schema change permitted multi-row matches.
+    if (tagId != null) {
+      whereClauses.add(
+        'EXISTS (SELECT 1 FROM bookmark_tags bt '
+        'WHERE bt.bookmark_id = b.id AND bt.tag_id = ?)',
+      );
+      variables.add(Variable<String>(tagId));
+    }
+
+    final whereSql = whereClauses.join(' AND ');
+
     return _db
         .customSelect(
           'SELECT b.* FROM bookmarks b '
           'JOIN bookmarks_fts fts ON fts.rowid = b.rowid '
-          'WHERE bookmarks_fts MATCH ? '
+          'WHERE $whereSql '
           'ORDER BY bm25(bookmarks_fts), b.created_at DESC',
-          variables: [Variable<String>(matchString)],
+          variables: variables,
           readsFrom: {_db.bookmarks, _db.bookmarkTags, _db.tags},
         )
         .watch()
@@ -61,35 +89,10 @@ class SearchRepository implements ISearchRepository {
   /// reduce to zero usable tokens (empty / whitespace-only / a query
   /// composed only of non-token characters).
   ///
-  /// We do NOT expose FTS5's query language to the user -- the search bar
-  /// is a free-text input. The FTS5 query parser only accepts barewords
-  /// composed of letters, digits, underscores, or characters above U+007F
-  /// (per the SQLite `fts5IsBareword` rule); the named query operators
-  /// (`" * : ( ) ^ + - ~`) are reserved syntax; every other ASCII
-  /// punctuation character (`. , / ? = & ' # %` …) is rejected outright
-  /// and would surface as `fts5: syntax error near "X"`.
-  ///
-  /// To shield the user from all of those failure modes we use a
-  /// whitelist: keep Unicode letters, digits, underscore, and whitespace;
-  /// replace everything else with a single space so it acts purely as a
-  /// token boundary. A query like `dart.dev` becomes `dart dev` -> tokens
-  /// `dart*`, `dev*`; `c++` becomes `c` -> token `c*`; `it's wonderful`
-  /// becomes `it s wonderful` -> three prefix tokens; `https://x.y` -> `x y`.
+  /// Tokenisation is delegated to [searchTokens] in `search_tokenizer.dart`
+  /// so the visible highlight spans (which read the same tokens via
+  /// `searchQueryTokensProvider`) cannot drift from what BM25 matches.
   static String _toMatchQuery(String userQuery) {
-    final cleaned = userQuery.replaceAll(_nonTokenChars, ' ');
-    final tokens = cleaned
-        .split(_whitespace)
-        .where((t) => t.isNotEmpty)
-        .map((t) => '$t*')
-        .toList();
-    return tokens.join(' ');
+    return searchTokens(userQuery).map((t) => '$t*').join(' ');
   }
-
-  // Whitelist complement: anything that is NOT a Unicode letter / digit /
-  // underscore / whitespace. Replaced with a space (token break) before
-  // tokenisation. This covers FTS5 operator characters AND every other
-  // punctuation character that would otherwise crash the FTS5 parser.
-  static final RegExp _nonTokenChars =
-      RegExp(r'[^\p{L}\p{N}_\s]', unicode: true);
-  static final RegExp _whitespace = RegExp(r'\s+');
 }

@@ -12,6 +12,11 @@ abstract final class AppColors {
   static const surfaceHover = Color(0xFFECEAE4);
   static const surfaceSelected = Color(0xFFEFDFD7);
 
+  /// Brand accent at ~20% alpha. Calm tint for inline search-result
+  /// term highlights — visible against both `surfaceContent` and
+  /// `surfaceSelected` without reading as a selection state.
+  static const highlightSearch = Color(0x33D05A58);
+
   static const syncSynced = Color(0xFF6A9E6A);
   static const syncUnsynced = Color(0xFFC8873A);
   static const syncUnavailable = Color(0xFF9A9A9A);

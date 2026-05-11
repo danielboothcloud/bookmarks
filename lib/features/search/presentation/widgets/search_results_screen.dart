@@ -20,6 +20,7 @@ class SearchResultsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final resultsAsync = ref.watch(searchResultsProvider);
+    final terms = ref.watch(searchQueryTokensProvider);
 
     return resultsAsync.when(
       // Loading: hold the layout silent. The first emission lands within
@@ -36,12 +37,29 @@ class SearchResultsScreen extends ConsumerWidget {
         ),
       ),
       data: (results) {
-        if (results.isEmpty) return const SizedBox.shrink();
+        if (results.isEmpty) {
+          final trimmed = ref.read(searchQueryProvider).trim();
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              AppSpacing.lg,
+              AppSpacing.md,
+              AppSpacing.md,
+            ),
+            child: Text(
+              'No bookmarks match ‘$trimmed’',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textMuted,
+                  ),
+            ),
+          );
+        }
         return ListView.builder(
           itemCount: results.length,
           itemBuilder: (context, index) => BookmarkListItem(
             key: ValueKey(results[index].id),
             bookmark: results[index],
+            highlightTerms: terms,
           ),
         );
       },

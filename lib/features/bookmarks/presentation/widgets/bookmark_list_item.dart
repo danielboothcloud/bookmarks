@@ -5,6 +5,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_spacing.dart';
 import '../../../../core/util/url_launcher_service.dart';
 import '../../../../core/widgets/favicon_widget.dart';
+import '../../../../core/widgets/highlighted_text.dart';
 import '../../../tags/presentation/widgets/bookmark_tag_chip_row.dart';
 import '../../application/bookmark_providers.dart';
 import '../../domain/bookmark.dart';
@@ -19,10 +20,16 @@ import '../../domain/bookmark.dart';
 class BookmarkListItem extends ConsumerStatefulWidget {
   const BookmarkListItem({
     required this.bookmark,
+    this.highlightTerms = const <String>[],
     super.key,
   });
 
   final Bookmark bookmark;
+
+  /// Bareword terms to highlight inline in the title and URL. Empty
+  /// (the default) renders plain [Text] for both fields — non-search
+  /// call sites stay glyph-identical and pay zero highlight cost.
+  final List<String> highlightTerms;
 
   @override
   ConsumerState<BookmarkListItem> createState() => _BookmarkListItemState();
@@ -94,8 +101,9 @@ class _BookmarkListItemState extends ConsumerState<BookmarkListItem> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(
+                            HighlightedText(
                               bookmark.title,
+                              terms: widget.highlightTerms,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: textTheme.titleMedium?.copyWith(
@@ -103,8 +111,9 @@ class _BookmarkListItemState extends ConsumerState<BookmarkListItem> {
                               ),
                             ),
                             const SizedBox(height: 2),
-                            Text(
+                            HighlightedText(
                               bookmark.url,
+                              terms: widget.highlightTerms,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: textTheme.bodySmall?.copyWith(
