@@ -1,3 +1,25 @@
+/// The three-pane application shell.
+///
+/// Hosts the global `Shortcuts` + `Actions` wiring that every keyboard
+/// surface in the app depends on -- Cmd+N (add), Cmd+F (focus search),
+/// Esc (cascade dismiss), Delete/Backspace (delete selected item). If
+/// primary focus ever leaves this subtree, those shortcuts stop firing
+/// and the platform beeps.
+///
+/// The shell is wrapped in a translucent [Listener] -- the
+/// `_AppShellFocusReclaimer` below -- whose only job is to put primary
+/// focus back inside the shell after a pointer-down lands on an inert
+/// surface (Container padding, the SearchBar surround, an empty content
+/// area). Without it, clicking anywhere that has no `onTap` would
+/// silently break every global shortcut until the user re-clicked a
+/// focus-claiming widget. The reclaimer was added in Story 3.1 after
+/// macOS smoke surfaced the leak that 480 tests had missed; it is
+/// load-bearing infrastructure, not optional polish. Do not strip the
+/// Listener wrap during refactors -- see the doc on
+/// `_AppShellFocusReclaimer` and `docs/focus-model.md` (Rule 5, gotcha
+/// appendix entry on `Focus(autofocus: true)`).
+library;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
