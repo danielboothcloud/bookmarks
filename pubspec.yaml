@@ -27,8 +27,15 @@ dependencies:
   freezed_annotation: ^3.0.0
   json_annotation: ^4.9.0
 
+  # Crypto (PKCE SHA-256)
+  crypto: ^3.0.5
+
   # Security
   flutter_secure_storage: ^9.2.4
+
+  # Google Drive (Epic 4)
+  googleapis: ^13.2.0
+  googleapis_auth: ^1.6.0
 
   # Network / connectivity
   connectivity_plus: ^6.1.4

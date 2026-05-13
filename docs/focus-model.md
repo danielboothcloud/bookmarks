@@ -100,6 +100,7 @@ Story 2.5 H1 was this exact bug. Pattern: any `Consumer*StatefulWidget` whose st
 | 8 | `FolderPicker` `MenuAnchor` | `folder_picker.dart` | yes (anchor) | yes | Reference for the `MenuAnchor` mouse-Esc fix. |
 | 9 | `_FolderContextMenu` `MenuAnchor` | `folder_tree.dart` | yes (`_rowFocusNode`) | yes (`onSecondaryTapDown`) | Same `CallbackShortcuts(escape)` idiom. |
 | 10 | `BookmarkSearchBar` `TextField` | `features/search/presentation/widgets/search_bar.dart` | yes (via `searchBarFocusNodeProvider`) | yes (`TextField` self-claim on tap) | Tab-traversal slot 2 (sidebar → search bar → content → detail). FocusNode is provider-owned so AppShell's `FocusSearchIntent` action can request focus from outside the widget tree without a GlobalKey. The State adds a focus-gain listener that positions the cursor at end-of-text in a post-frame callback. |
+| 11 | `DriveConnectButton` (welcome screen) | `features/onboarding/presentation/widgets/drive_connect_button.dart` | implicit via Material `FilledButton` | yes (button self-claim on tap) | Sole focusable widget on `/welcome` — Tab moves focus to it from the natural focus root; Enter / Space invoke `DriveAuthNotifier.connect()`. The welcome screen is a top-level GoRoute outside `AppShell`'s `Shortcuts` subtree, so Hard Rule 1 doesn't apply here (no app-level shortcuts are bound on /welcome). |
 
 When adding a new surface, append a row here.
 
