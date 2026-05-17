@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -5,8 +7,27 @@ import 'package:http/http.dart' as http;
 import 'drive_auth_service.dart';
 import 'drive_auth_state.dart';
 import 'drive_file_service.dart';
+import 'file_token_storage.dart';
 
+/// Provides the [FlutterSecureStorage] implementation appropriate for
+/// the current platform.
+///
+/// On macOS the default `FlutterSecureStorage` (Keychain Services)
+/// requires the running binary to be signed with an Apple development
+/// certificate; without that, every Keychain write fails with
+/// `errSecMissingEntitlement (-34018)`. Since this project ships
+/// unsigned (no Xcode requirement), macOS falls back to
+/// [FileTokenStorage] — a JSON file at
+/// `~/Library/Application Support/dev.bookmarks.bookmarks/secrets.json`
+/// with mode `0600`. See `docs/auth-model.md`.
+///
+/// Other platforms (Linux libsecret, Windows Credential Manager,
+/// iOS/Android Keychain/Keystore) work fine with the default and stay
+/// on it.
 final flutterSecureStorageProvider = Provider<FlutterSecureStorage>((_) {
+  if (Platform.isMacOS) {
+    return FileTokenStorage.macOSDefault();
+  }
   return const FlutterSecureStorage();
 });
 

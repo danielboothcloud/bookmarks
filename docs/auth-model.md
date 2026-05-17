@@ -33,9 +33,19 @@ OAuth flows for Desktop public clients use Authorization Code + PKCE (RFC 7636):
 
 The OAuth `redirect_uri` is `http://127.0.0.1:<port>/`, where `<port>` is OS-assigned at `HttpServer.bind(InternetAddress.loopbackIPv4, 0)` time. The server is one-shot: it accepts a single request (the OAuth callback), responds with an inline-CSS HTML success/error page, and shuts down. A 5-minute timeout bounds the wait; on timeout, the port is released and the flow yields `DriveAuthDisconnected` (same as user cancellation).
 
-### 4. Tokens live in platform secure storage
+### 4. Tokens live in platform secure storage (with one macOS caveat)
 
-All persisted auth state lives in `flutter_secure_storage` — macOS Keychain, Windows Credential Manager, Linux libsecret. Nothing auth-related is in the local Drift DB, in a JSON file, in shared preferences, or in an env variable.
+All persisted auth state goes through `flutter_secure_storage`:
+
+- **Linux** → libsecret
+- **Windows** → Credential Manager
+- **iOS / Android** → Keychain / Keystore
+- **macOS, signed builds** → Keychain Services
+- **macOS, unsigned builds (this project's default)** → `FileTokenStorage`, a JSON file at `~/Library/Application Support/dev.bookmarks.bookmarks/secrets.json` with mode `0600`.
+
+The macOS fallback exists because macOS 26 (Tahoe) requires an `application-identifier` entitlement on the binary to access Keychain — which only lands when the bundle is code-signed with a real Apple Team (Personal Team via Xcode is sufficient). This project ships unsigned to keep the build prerequisites short (no Xcode, no Apple ID); the `FileTokenStorage` fallback documented in `lib/core/drive/file_token_storage.dart` is the trade-off.
+
+Nothing auth-related is in the local Drift DB, in shared preferences, or in an env variable. Either path keeps tokens out of the codebase and out of git.
 
 ### 5. Zero telemetry, zero analytics, zero error reporting
 
@@ -119,7 +129,7 @@ Anything outside this list is a bug. The app must NEVER contact Firebase, Sentry
 
 ## Secure-storage keys
 
-All under namespace `drive.*`. Values are platform-native secure storage (Keychain / Credential Manager / libsecret).
+All under namespace `drive.*`. Values are platform-native secure storage (Keychain / Credential Manager / libsecret), or — on unsigned macOS builds — `FileTokenStorage`'s JSON file (see Hard rule 4).
 
 | Key                            | Format                                  | Written by                                     | Lifecycle                                          |
 |--------------------------------|------------------------------------------|------------------------------------------------|-----------------------------------------------------|
