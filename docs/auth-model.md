@@ -33,17 +33,18 @@ OAuth flows for Desktop public clients use Authorization Code + PKCE (RFC 7636):
 
 The OAuth `redirect_uri` is `http://127.0.0.1:<port>/`, where `<port>` is OS-assigned at `HttpServer.bind(InternetAddress.loopbackIPv4, 0)` time. The server is one-shot: it accepts a single request (the OAuth callback), responds with an inline-CSS HTML success/error page, and shuts down. A 5-minute timeout bounds the wait; on timeout, the port is released and the flow yields `DriveAuthDisconnected` (same as user cancellation).
 
-### 4. Tokens live in platform secure storage (with one macOS caveat)
+### 4. Tokens live in platform secure storage (with a macOS file-fallback)
 
-All persisted auth state goes through `flutter_secure_storage`:
+All persisted auth state goes through `FlutterSecureStorage`:
 
 - **Linux** → libsecret
 - **Windows** → Credential Manager
 - **iOS / Android** → Keychain / Keystore
-- **macOS, signed builds** → Keychain Services
-- **macOS, unsigned builds (this project's default)** → `FileTokenStorage`, a JSON file at `~/Library/Application Support/dev.bookmarks.bookmarks/secrets.json` with mode `0600`.
+- **macOS (all build modes)** → `FileTokenStorage`, a JSON file at `~/Library/Application Support/dev.bookmarks.bookmarks/secrets.json` with mode `0600`.
 
-The macOS fallback exists because macOS 26 (Tahoe) requires an `application-identifier` entitlement on the binary to access Keychain — which only lands when the bundle is code-signed with a real Apple Team (Personal Team via Xcode is sufficient). This project ships unsigned to keep the build prerequisites short (no Xcode, no Apple ID); the `FileTokenStorage` fallback documented in `lib/core/drive/file_token_storage.dart` is the trade-off.
+The macOS file-fallback exists because macOS 26 (Tahoe) requires an `application-identifier` entitlement on the binary to access Keychain — which only lands when the bundle is code-signed with a real Apple Team. This project ships unsigned to keep the build prerequisites short (no Xcode, no Apple ID). To keep behaviour identical between `flutter run` and a sandboxed Release build, the macOS provider uses `FileTokenStorage` in **every** build mode — so a future move to signed builds doesn't silently change the on-disk token location.
+
+If the project later adopts Apple Developer signing, switching macOS to Keychain is a single-provider change in `drive_auth_providers.dart` plus restoring `keychain-access-groups` in `Release.entitlements`.
 
 Nothing auth-related is in the local Drift DB, in shared preferences, or in an env variable. Either path keeps tokens out of the codebase and out of git.
 

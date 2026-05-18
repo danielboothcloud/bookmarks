@@ -2,13 +2,21 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Sandbox on for production. Storage is FileTokenStorage at
+	     ~/Library/Application Support/dev.bookmarks.bookmarks/secrets.json
+	     (see lib/core/drive/file_token_storage.dart). No Keychain access
+	     is requested because the provider does not call Keychain on macOS
+	     in any build mode. -->
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<!-- network.client: Drive REST API calls (token exchange + files
+	     endpoints). -->
 	<key>com.apple.security.network.client</key>
 	<true/>
-	<key>keychain-access-groups</key>
-	<array>
-		<string>$(AppIdentifierPrefix)dev.bookmarks.bookmarks</string>
-	</array>
+	<!-- network.server: required to bind the localhost HttpServer that
+	     receives the OAuth callback. Without it the OAuth flow fails
+	     under sandbox. -->
+	<key>com.apple.security.network.server</key>
+	<true/>
 </dict>
 </plist>

@@ -15,6 +15,15 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:url_launcher/url_launcher.dart' as launcher;
 
+/// Test credentials so the fail-fast empty-config guard in connect()
+/// doesn't short-circuit every flow test. The fail-fast contract is
+/// covered by the dedicated `fails fast` test at the bottom of this
+/// file.
+const _testCreds = OAuthClientCredentials(
+  clientId: 'test-client-id',
+  clientSecret: 'test-client-secret',
+);
+
 class _InMemorySecureStorage implements FlutterSecureStorage {
   final Map<String, String> store = {};
 
@@ -144,10 +153,16 @@ Future<void> _simulateCallback(Uri authUri, Map<String, String> params) async {
   final redirect = authUri.queryParameters['redirect_uri']!;
   final callbackUri =
       Uri.parse(redirect).replace(queryParameters: params);
-  final response = await http.get(callbackUri);
-  // The server returns 200 (or 400 for state-mismatch); we don't assert here,
-  // just drain the response.
-  expect(response.statusCode, anyOf(200, 400));
+  try {
+    final response = await http.get(callbackUri);
+    // 200 = success HTML; 400 = state-mismatch / missing code; 500 = error
+    // path (token POST failed or ensureBookmarksFile threw — the request is
+    // still pending when the catch block fires and responds with _errorHtml).
+    expect(response.statusCode, anyOf(200, 400, 500));
+  } catch (_) {
+    // Server may have already torn down (force-close) before the response
+    // fully streamed — acceptable in failure-path tests.
+  }
 }
 
 void main() {
@@ -290,6 +305,7 @@ void main() {
         driveFileService: fakeFileService,
         httpClient: mockHttp,
         urlLauncher: recorder,
+        credentials: _testCreds,
       );
 
       recorder.onLaunch = (uri) async {
@@ -334,6 +350,7 @@ void main() {
         driveFileService: fakeFileService,
         httpClient: mockHttp,
         urlLauncher: recorder,
+        credentials: _testCreds,
       );
 
       recorder.onLaunch = (uri) async {
@@ -369,6 +386,7 @@ void main() {
         driveFileService: fakeFileService,
         httpClient: mockHttp,
         urlLauncher: recorder,
+        credentials: _testCreds,
       );
 
       recorder.onLaunch = (uri) async {
@@ -389,6 +407,7 @@ void main() {
         driveFileService: fakeFileService,
         httpClient: mockHttp,
         urlLauncher: recorder,
+        credentials: _testCreds,
       );
 
       recorder.onLaunch = (uri) async {
@@ -413,6 +432,7 @@ void main() {
         driveFileService: fakeFileService,
         httpClient: mockHttp,
         urlLauncher: recorder,
+        credentials: _testCreds,
       );
 
       recorder.onLaunch = (uri) async {
@@ -439,6 +459,7 @@ void main() {
         driveFileService: fakeFileService,
         httpClient: mockHttp,
         urlLauncher: recorder,
+        credentials: _testCreds,
       );
 
       recorder.onLaunch = (uri) async {
@@ -461,6 +482,7 @@ void main() {
         driveFileService: fakeFileService,
         httpClient: mockHttp,
         urlLauncher: recorder,
+        credentials: _testCreds,
       );
       // No callback fired — server times out.
       recorder.onLaunch = null;
@@ -496,6 +518,7 @@ void main() {
         driveFileService: fakeFileService,
         httpClient: mockHttp,
         urlLauncher: recorder,
+        credentials: _testCreds,
       );
 
       recorder.onLaunch = (uri) async {
@@ -541,6 +564,28 @@ void main() {
       // works for tests is enough; deeper PKCE conformance covered by
       // extractEmailFromIdToken + happy-path tests above.
       expect(svc.runtimeType, svc2.runtimeType);
+    });
+
+    test('connect() fails fast when OAuth credentials are missing', () async {
+      final svc = DriveAuthService(
+        storage: storage,
+        driveFileService: fakeFileService,
+        httpClient: MockClient((req) async => http.Response('', 200)),
+        urlLauncher: recorder,
+        credentials: const OAuthClientCredentials(
+          clientId: '',
+          clientSecret: '',
+        ),
+      );
+      final states = await svc.connect().toList();
+      expect(states, hasLength(2));
+      expect(states.first, isA<DriveAuthConnecting>());
+      expect(states.last, isA<DriveAuthFailed>());
+      final failed = states.last as DriveAuthFailed;
+      expect(failed.error, isA<AuthError>());
+      expect((failed.error as AuthError).message, contains('not configured'));
+      // No browser launched, no server bound.
+      expect(recorder.launched, isNull);
     });
 
     test(

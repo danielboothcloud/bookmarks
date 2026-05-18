@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart' as launcher;
@@ -51,6 +52,23 @@ class _DefaultUrlLauncher implements UrlLauncher {
 /// indefinitely.
 const Duration kDefaultOAuthCallbackTimeout = Duration(minutes: 5);
 
+/// The OAuth client identity used for the flow. Pulled from compile-time
+/// constants by default; tests inject explicit values so the fail-fast
+/// "OAuth client not configured" path only triggers in real builds.
+class OAuthClientCredentials {
+  const OAuthClientCredentials({required this.clientId, required this.clientSecret});
+
+  /// Read from `--dart-define=BOOKMARKS_OAUTH_CLIENT_ID=...` etc.
+  const OAuthClientCredentials.fromDartDefines()
+      : clientId = kOAuthClientId,
+        clientSecret = kOAuthClientSecret;
+
+  final String clientId;
+  final String clientSecret;
+
+  bool get isComplete => clientId.isNotEmpty && clientSecret.isNotEmpty;
+}
+
 /// One-shot OAuth + token-persist + bookmarks-file-ensure flow.
 ///
 /// Mutates a [DriveAuthState] held outside the service (see
@@ -62,17 +80,21 @@ class DriveAuthService {
     required http.Client httpClient,
     UrlLauncher urlLauncher = const _DefaultUrlLauncher(),
     Random? random,
+    OAuthClientCredentials credentials =
+        const OAuthClientCredentials.fromDartDefines(),
   })  : _storage = storage,
         _driveFileService = driveFileService,
         _http = httpClient,
         _launcher = urlLauncher,
-        _random = random ?? Random.secure();
+        _random = random ?? Random.secure(),
+        _credentials = credentials;
 
   final FlutterSecureStorage _storage;
   final DriveFileService _driveFileService;
   final http.Client _http;
   final UrlLauncher _launcher;
   final Random _random;
+  final OAuthClientCredentials _credentials;
 
   /// Resolve current auth state at startup. Returns [DriveAuthConnected]
   /// if all four token keys + the file id are present; otherwise
@@ -123,7 +145,21 @@ class DriveAuthService {
   }) async* {
     yield const DriveAuthState.connecting();
 
+    // Fail-fast: missing OAuth config produces a clear error instead of a
+    // confusing 401 from Google's token endpoint.
+    if (!_credentials.isComplete) {
+      yield const DriveAuthState.failed(
+        AuthError(
+          'OAuth client not configured. Pass BOOKMARKS_OAUTH_CLIENT_ID and '
+          'BOOKMARKS_OAUTH_CLIENT_SECRET via --dart-define. See '
+          'lib/core/drive/oauth_config.dart.',
+        ),
+      );
+      return;
+    }
+
     HttpServer? server;
+    HttpRequest? pendingRequest;
     final verifier = _generateCodeVerifier();
     final challenge = _computeChallenge(verifier);
     final state = _generateState();
@@ -133,7 +169,7 @@ class DriveAuthService {
       final redirectUri = Uri.parse('http://127.0.0.1:${server.port}/');
 
       final authUri = Uri.parse(kAuthEndpoint).replace(queryParameters: {
-        'client_id': kOAuthClientId,
+        'client_id': _credentials.clientId,
         'response_type': 'code',
         'scope': kDriveAppDataScope,
         'redirect_uri': redirectUri.toString(),
@@ -197,11 +233,11 @@ class DriveAuthService {
         return;
       }
 
-      // Acknowledge the browser before doing any network work — keeps
-      // the success page snappy even if the token POST is slow.
-      await _respondHtml(httpRequest, _successHtml, status: HttpStatus.ok);
-      await server.close(force: true);
-      server = null;
+      // Hold the open HTTP request until token exchange + storage write +
+      // ensureBookmarksFile all succeed, so the browser's "Connected"
+      // page never lies about an outcome the app then rolls back. The
+      // outer catch responds with _errorHtml if anything below throws.
+      pendingRequest = httpRequest;
 
       final tokenResponse = await _http.post(
         Uri.parse(kTokenEndpoint),
@@ -210,8 +246,8 @@ class DriveAuthService {
           'grant_type': 'authorization_code',
           'code': code,
           'redirect_uri': redirectUri.toString(),
-          'client_id': kOAuthClientId,
-          'client_secret': kOAuthClientSecret,
+          'client_id': _credentials.clientId,
+          'client_secret': _credentials.clientSecret,
           'code_verifier': verifier,
         },
       );
@@ -231,6 +267,13 @@ class DriveAuthService {
       }
 
       final email = extractEmailFromIdToken(idToken) ?? 'Google account';
+      if (email == 'Google account' && kDebugMode) {
+        debugPrint(
+          'DriveAuthService: id_token had no email claim; displaying '
+          '"Google account" in Settings. This is expected when the '
+          'openid/email scope is not requested.',
+        );
+      }
       final expiresAt = DateTime.now()
           .toUtc()
           .add(Duration(seconds: expiresIn))
@@ -252,8 +295,27 @@ class DriveAuthService {
       );
       await _storage.write(key: DriveStorageKeys.fileId, value: fileId);
 
+      // Everything persisted — only now do we tell the browser we're done.
+      await _respondHtml(pendingRequest, _successHtml, status: HttpStatus.ok);
+      pendingRequest = null;
+      await server.close(force: true);
+      server = null;
+
       yield DriveAuthState.connected(email: email, fileId: fileId);
     } catch (error, stack) {
+      // Make the browser tab match the app's state instead of silently
+      // hanging on a half-completed callback.
+      if (pendingRequest != null) {
+        try {
+          await _respondHtml(
+            pendingRequest,
+            _errorHtml,
+            status: HttpStatus.internalServerError,
+          );
+        } catch (_) {
+          // best-effort
+        }
+      }
       if (server != null) {
         await server.close(force: true);
       }
@@ -339,10 +401,7 @@ class DriveAuthService {
     if (error is FormatException) {
       return AuthError(error.message);
     }
-    // PlatformException ships from flutter_secure_storage; we don't
-    // import the package here, so type-test by name to avoid pulling
-    // services as a direct dep of this file.
-    if (error.runtimeType.toString() == 'PlatformException') {
+    if (error is PlatformException) {
       return StorageError(error.toString());
     }
     return AuthError(error.toString());

@@ -215,6 +215,10 @@ ProviderContainer _container({
         driveFileService: fileService,
         httpClient: httpClient,
         urlLauncher: launcher,
+        credentials: const OAuthClientCredentials(
+          clientId: 'integration-client-id',
+          clientSecret: 'integration-client-secret',
+        ),
       ),
     ),
   ]);

@@ -30,7 +30,7 @@ class WelcomeScreen extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                const SizedBox(height: AppSpacing.xl),
+                const SizedBox(height: AppSpacing.xxl),
                 Text(
                   'Bookmarks',
                   style: Theme.of(context).textTheme.headlineLarge?.copyWith(

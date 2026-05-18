@@ -69,8 +69,25 @@ class FileTokenStorage implements FlutterSecureStorage {
     if (!await _file.exists()) return <String, String>{};
     final raw = await _file.readAsString();
     if (raw.isEmpty) return <String, String>{};
-    final decoded = jsonDecode(raw) as Map<String, dynamic>;
-    return decoded.map((k, v) => MapEntry(k, v as String));
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return decoded.map((k, v) => MapEntry(k, v as String));
+    } catch (error) {
+      // Corrupt or hand-edited secrets file. Quarantine and degrade to
+      // empty so the user is treated as disconnected and re-auths,
+      // rather than crashing the boot. The .corrupt sibling lets the
+      // user (or a future diagnostics view) inspect what went wrong.
+      try {
+        final corrupt = File('${_file.path}.corrupt');
+        if (await corrupt.exists()) await corrupt.delete();
+        await _file.rename(corrupt.path);
+      } catch (_) {
+        // best-effort
+      }
+      // ignore: avoid_print
+      print('FileTokenStorage: corrupt secrets.json quarantined ($error)');
+      return <String, String>{};
+    }
   }
 
   Future<void> _writeMap(Map<String, String> data) async {
@@ -78,20 +95,32 @@ class FileTokenStorage implements FlutterSecureStorage {
       await _directory.create(recursive: true);
     }
     final tmp = File('${_file.path}.tmp');
-    await tmp.writeAsString(jsonEncode(data), flush: true);
-    // Restrict to user-only before the rename so the file is never
-    // world-readable on disk, even briefly. `chmod` is in /bin and
-    // always available on macOS.
-    final chmod = await Process.run('chmod', ['600', tmp.path]);
-    if (chmod.exitCode != 0) {
-      // Non-fatal — log and continue. Failing here would leave the
-      // user unable to persist tokens, which is worse than a slightly
-      // more-readable file on a single-user box.
-      // ignore: avoid_print
-      print('FileTokenStorage: chmod 600 returned ${chmod.exitCode}: '
-          '${chmod.stderr}');
+    var renamed = false;
+    try {
+      await tmp.writeAsString(jsonEncode(data), flush: true);
+      // Restrict to user-only before the rename so the file is never
+      // world-readable on disk, even briefly. `chmod` is in /bin and
+      // always available on macOS.
+      final chmod = await Process.run('chmod', ['600', tmp.path]);
+      if (chmod.exitCode != 0) {
+        // Non-fatal — log and continue. Failing here would leave the
+        // user unable to persist tokens, which is worse than a slightly
+        // more-readable file on a single-user box.
+        // ignore: avoid_print
+        print('FileTokenStorage: chmod 600 returned ${chmod.exitCode}: '
+            '${chmod.stderr}');
+      }
+      await tmp.rename(_file.path);
+      renamed = true;
+    } finally {
+      if (!renamed) {
+        try {
+          if (await tmp.exists()) await tmp.delete();
+        } catch (_) {
+          // best-effort cleanup
+        }
+      }
     }
-    await tmp.rename(_file.path);
   }
 
   @override
