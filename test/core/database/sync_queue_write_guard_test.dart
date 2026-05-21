@@ -1,4 +1,5 @@
 import 'package:bookmarks/core/database/app_database.dart';
+import 'package:bookmarks/core/error/result.dart';
 import 'package:bookmarks/features/bookmarks/data/bookmark_repository.dart';
 import 'package:bookmarks/features/bookmarks/domain/bookmark.dart';
 import 'package:bookmarks/features/folders/data/folder_repository.dart';
@@ -9,11 +10,12 @@ import 'package:drift/drift.dart' show Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Cross-cutting invariant: no application code path is allowed to write to
-/// `sync_queue`. The table is reserved for SQL triggers (Story 4.2). This
-/// test exercises a representative set of bookmark / folder / tag mutations
-/// and asserts the queue stays empty throughout — catching accidental
-/// repository-layer writes before sync ships.
+/// Cross-cutting invariant: every user-initiated repository mutation must
+/// produce a `sync_queue` row via the SQL triggers installed by Story 4.2
+/// (schema v7). FTS-only mutations must NOT produce queue rows. The
+/// existing `sync_queue` "stays empty" assertion (Epic 2 T5, Epic 3 AC10)
+/// is inverted here for the positive side of the contract: triggers fire
+/// when they should, and don't fire when they shouldn't.
 void main() {
   late AppDatabase db;
   late BookmarkRepository bookmarkRepo;
@@ -39,6 +41,26 @@ void main() {
         )
         .get();
     return rows.single.read<int>('c');
+  }
+
+  Future<List<Map<String, Object?>>> syncQueueRows() async {
+    final rows = await db.customSelect(
+      'SELECT id, operation, entity_type, entity_id, payload '
+      'FROM sync_queue ORDER BY id',
+      variables: <Variable<Object>>[],
+    ).get();
+    return rows
+        .map((r) => <String, Object?>{
+              'operation': r.read<String>('operation'),
+              'entity_type': r.read<String>('entity_type'),
+              'entity_id': r.read<String>('entity_id'),
+              'payload': r.readNullable<String>('payload'),
+            })
+        .toList();
+  }
+
+  Future<void> clearSyncQueue() async {
+    await db.customStatement('DELETE FROM sync_queue');
   }
 
   Bookmark _bookmark({
@@ -68,54 +90,189 @@ void main() {
     );
   }
 
-  test('sync_queue stays empty across bookmark / folder / tag mutations',
-      () async {
-    expect(await syncQueueRowCount(), 0,
-        reason: 'fresh DB should have no sync_queue rows');
+  group('Sync triggers write to sync_queue on user mutations (Story 4.2)', () {
+    test('fresh DB has no queue rows', () async {
+      expect(await syncQueueRowCount(), 0);
+    });
 
-    // Folders: insert, rename, then leave for cascade-delete below.
-    await folderRepo.save(_folder(id: 'f-root'));
-    await folderRepo.save(_folder(id: 'f-child', parentId: 'f-root'));
-    await folderRepo.save(_folder(
-      id: 'f-root',
-      name: 'Renamed Root',
-    )); // upsert / rename
-    expect(await syncQueueRowCount(), 0,
-        reason: 'folder insert / rename must not enqueue');
+    test('folder insert/rename/delete each enqueue one row', () async {
+      await folderRepo.save(_folder(id: 'f-root'));
+      expect((await syncQueueRows()).last, {
+        'operation': 'upsert',
+        'entity_type': 'folder',
+        'entity_id': 'f-root',
+        'payload': null,
+      });
 
-    // Bookmarks: insert into root and child, update one (move to child),
-    // delete one. The delete path also wipes bookmark_tags in the same
-    // transaction — neither should enqueue.
-    await bookmarkRepo.save(_bookmark(id: 'bm-1', folderId: 'f-root'));
-    await bookmarkRepo.save(_bookmark(id: 'bm-2'));
-    await bookmarkRepo
-        .save(_bookmark(id: 'bm-1', folderId: 'f-child', title: 'Updated'));
-    expect(await syncQueueRowCount(), 0,
-        reason: 'bookmark insert / update / move must not enqueue');
+      await clearSyncQueue();
+      await folderRepo.save(_folder(id: 'f-root', name: 'Renamed'));
+      // FolderRepository.save uses insertOnConflictUpdate (an UPSERT, not a
+      // REPLACE), so the second save of an existing PK fires AU exactly
+      // once -> one folder-upsert row.
+      expect(await syncQueueRows(), [
+        {
+          'operation': 'upsert',
+          'entity_type': 'folder',
+          'entity_id': 'f-root',
+          'payload': null,
+        },
+      ]);
 
-    // Tags: upsert (insert), link, unlink (idempotent), upsert again
-    // (case-insensitive reuse of the same row).
-    final tagResult = await tagRepo.upsertByName('Flutter');
-    final tag = (tagResult as dynamic).value as Tag;
-    await tagRepo.linkBookmarkTag('bm-1', tag.id);
-    await tagRepo.linkBookmarkTag('bm-2', tag.id);
-    await tagRepo.unlinkBookmarkTag('bm-2', tag.id);
-    await tagRepo.upsertByName('flutter'); // case-insensitive: same row
-    expect(await syncQueueRowCount(), 0,
-        reason: 'tag upsert / link / unlink must not enqueue');
+      await clearSyncQueue();
+      await folderRepo.deleteCascade({'f-root'});
+      // deleteCascade also deletes the child f-child via FK semantics in
+      // the same transaction; both produce delete rows.
+      final rows = await syncQueueRows();
+      final deletes = rows.where((r) => r['operation'] == 'delete').toList();
+      expect(
+        deletes
+            .where((r) => r['entity_type'] == 'folder')
+            .map((r) => r['entity_id'])
+            .toSet()
+            .contains('f-root'),
+        isTrue,
+      );
+    });
 
-    // Bookmark delete (also cascades bookmark_tags cleanup).
-    await bookmarkRepo.delete('bm-1');
-    expect(await syncQueueRowCount(), 0,
-        reason: 'bookmark delete (with tag-junction cleanup) must not enqueue');
+    test('bookmark insert / update / delete each enqueue rows', () async {
+      await bookmarkRepo.save(_bookmark(id: 'bm-1'));
+      expect((await syncQueueRows()).last, {
+        'operation': 'upsert',
+        'entity_type': 'bookmark',
+        'entity_id': 'bm-1',
+        'payload': null,
+      });
 
-    // Folder cascade delete (removes f-root + f-child + any bookmarks under
-    // them + any junctions for those bookmarks). Re-seed something to
-    // delete first.
-    await bookmarkRepo.save(_bookmark(id: 'bm-3', folderId: 'f-child'));
-    await tagRepo.linkBookmarkTag('bm-3', tag.id);
-    await folderRepo.deleteCascade({'f-root', 'f-child'});
-    expect(await syncQueueRowCount(), 0,
-        reason: 'folder cascade delete must not enqueue');
+      await clearSyncQueue();
+      await bookmarkRepo.save(_bookmark(id: 'bm-1', title: 'Updated'));
+      // BookmarkRepository.save uses insertOnConflictUpdate -> the second
+      // save of an existing PK fires AU exactly once.
+      expect(await syncQueueRows(), [
+        {
+          'operation': 'upsert',
+          'entity_type': 'bookmark',
+          'entity_id': 'bm-1',
+          'payload': null,
+        },
+      ]);
+
+      await clearSyncQueue();
+      await bookmarkRepo.delete('bm-1');
+      final deleteRows = await syncQueueRows();
+      // BookmarkRepository.delete clears bookmark_tags first (which would
+      // fire bookmark_tags_sync_ad as bookmark-upsert if there were any
+      // junction rows). With no tags here, only bookmarks_sync_ad fires.
+      expect(deleteRows, [
+        {
+          'operation': 'delete',
+          'entity_type': 'bookmark',
+          'entity_id': 'bm-1',
+          'payload': null,
+        },
+      ]);
+    });
+
+    test('tag link / unlink each enqueue a bookmark-upsert row', () async {
+      await bookmarkRepo.save(_bookmark(id: 'bm-tag'));
+      final upsertResult = await tagRepo.upsertByName('flutter');
+      final tag = (upsertResult as Ok<Tag, dynamic>).value;
+
+      await clearSyncQueue();
+      await tagRepo.linkBookmarkTag('bm-tag', tag.id);
+      expect(await syncQueueRows(), [
+        {
+          'operation': 'upsert',
+          'entity_type': 'bookmark',
+          'entity_id': 'bm-tag',
+          'payload': null,
+        },
+      ]);
+
+      await clearSyncQueue();
+      await tagRepo.unlinkBookmarkTag('bm-tag', tag.id);
+      // unlinkBookmarkTag also hard-deletes the orphan tag, so we expect:
+      //   1) bookmark_tags_sync_ad   -> upsert bookmark bm-tag
+      //   2) tags_sync_ad            -> delete tag <tag.id>
+      final unlinkRows = await syncQueueRows();
+      expect(unlinkRows, hasLength(2));
+      expect(unlinkRows[0], {
+        'operation': 'upsert',
+        'entity_type': 'bookmark',
+        'entity_id': 'bm-tag',
+        'payload': null,
+      });
+      expect(unlinkRows[1], {
+        'operation': 'delete',
+        'entity_type': 'tag',
+        'entity_id': tag.id,
+        'payload': null,
+      });
+    });
+
+    test('tag upsertByName (first time) enqueues a tag-upsert row', () async {
+      await clearSyncQueue();
+      await tagRepo.upsertByName('NewTag');
+      final rows = await syncQueueRows();
+      expect(rows, hasLength(1));
+      expect(rows.single['operation'], 'upsert');
+      expect(rows.single['entity_type'], 'tag');
+    });
+
+    test('cascade folder delete enqueues rows for every affected row',
+        () async {
+      await folderRepo.save(_folder(id: 'f-root'));
+      await folderRepo.save(_folder(id: 'f-child', parentId: 'f-root'));
+      await bookmarkRepo.save(_bookmark(id: 'bm-c1', folderId: 'f-child'));
+      await bookmarkRepo.save(_bookmark(id: 'bm-c2', folderId: 'f-root'));
+
+      await clearSyncQueue();
+      await folderRepo.deleteCascade({'f-root', 'f-child'});
+
+      final rows = await syncQueueRows();
+      // We get a row per deletion: 2 bookmark deletes + 2 folder deletes,
+      // minimum. (The order is the DB's, not ours.)
+      final deletes = rows.where((r) => r['operation'] == 'delete').toList();
+      expect(deletes.length, greaterThanOrEqualTo(4));
+      expect(
+        deletes
+            .where((r) => r['entity_type'] == 'bookmark')
+            .map((r) => r['entity_id'])
+            .toSet(),
+        {'bm-c1', 'bm-c2'},
+      );
+      expect(
+        deletes
+            .where((r) => r['entity_type'] == 'folder')
+            .map((r) => r['entity_id'])
+            .toSet(),
+        {'f-root', 'f-child'},
+      );
+    });
+  });
+
+  group('FTS triggers must NOT write to sync_queue (Epic 3 invariant)', () {
+    test('FTS rebuild on populated DB produces zero sync_queue rows',
+        () async {
+      // Populate via repository (which fires sync triggers) -- clear queue
+      // -- then run an FTS-only rebuild and assert nothing else enqueued.
+      await bookmarkRepo.save(_bookmark(id: 'bm-fts'));
+      await clearSyncQueue();
+
+      await db.customStatement(
+        "INSERT INTO bookmarks_fts(bookmarks_fts) VALUES('rebuild')",
+      );
+
+      expect(await syncQueueRowCount(), 0,
+          reason: 'FTS rebuild is not a user mutation and must not enqueue');
+    });
+
+    test('FTS-internal optimize produces zero sync_queue rows', () async {
+      await bookmarkRepo.save(_bookmark(id: 'bm-opt'));
+      await clearSyncQueue();
+      await db.customStatement(
+        "INSERT INTO bookmarks_fts(bookmarks_fts) VALUES('optimize')",
+      );
+      expect(await syncQueueRowCount(), 0);
+    });
   });
 }

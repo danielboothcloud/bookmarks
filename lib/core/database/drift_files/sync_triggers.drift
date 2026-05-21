@@ -1,1 +1,140 @@
--- TODO(story-4.2): triggers populating sync_queue on bookmark/folder/tag mutations.
+-- sync_triggers: outbox triggers populating `sync_queue` on user mutations.
+--
+-- This file is the documented source-of-truth for the eleven AFTER triggers
+-- installed in Story 4.2 that mirror every user-initiated mutation on
+-- `bookmarks` / `folders` / `tags` / `bookmark_tags` into the `sync_queue`
+-- table as an "outbox" signal for the Drive sync engine. The runtime DDL
+-- is executed from `app_database.dart`'s migration via `customStatement`
+-- constants in `lib/core/database/sync_triggers_schema.dart`, mirroring
+-- the `bookmarks_fts.drift` precedent. The `@DriftDatabase` annotation
+-- does NOT include this file -- Drift's parser does not understand the
+-- non-trivial trigger bodies we use here (and conditional `IF NOT EXISTS`
+-- on `CREATE TRIGGER` is not part of the SQL dialect Drift's parser
+-- accepts as schema input). The .dart constants file is the executable
+-- mirror; this .drift file is documentation.
+--
+-- Why an outbox at all:
+--   The Drive sync engine (Story 4.2's `DriveSyncService`) follows a
+--   whole-snapshot upload model -- every push serializes the full local
+--   state to JSON and PUTs it to Drive. We don't NEED per-mutation deltas
+--   to push; we DO need a "something changed" signal so the engine knows
+--   when to fire. That signal is the `sync_queue` row count.
+--
+--   The triggers fire AFTER the user's mutation, inside the SAME SQL
+--   transaction. Either both the mutation AND the queue row commit, or
+--   neither does. This means the queue can never miss a user write, and
+--   it can never contain a row whose mutation got rolled back. The
+--   transactional integrity is the load-bearing property.
+--
+-- Operation / entity_type mapping:
+--   * bookmarks AI -> ('upsert', 'bookmark', NEW.id)
+--   * bookmarks AU -> ('upsert', 'bookmark', NEW.id)
+--   * bookmarks AD -> ('delete', 'bookmark', OLD.id)
+--   * folders   AI -> ('upsert', 'folder',   NEW.id)
+--   * folders   AU -> ('upsert', 'folder',   NEW.id)
+--   * folders   AD -> ('delete', 'folder',   OLD.id)
+--   * tags      AI -> ('upsert', 'tag',      NEW.id)
+--   * tags      AU -> ('upsert', 'tag',      NEW.id)
+--   * tags      AD -> ('delete', 'tag',      OLD.id)
+--   * bookmark_tags AI -> ('upsert', 'bookmark', NEW.bookmark_id)
+--   * bookmark_tags AD -> ('upsert', 'bookmark', OLD.bookmark_id)
+--
+-- Why bookmark_tags fires `entity_type = 'bookmark'`:
+--   The user-observable change when a tag is assigned or removed is "the
+--   bookmark's tag list now differs", not "a junction row exists in
+--   isolation". The snapshot model embeds tag references inside each
+--   bookmark, so a junction change IS a bookmark change. This also means
+--   the snapshot dedupes implicitly when a single user delete cascades
+--   into multiple queue rows for the same bookmark.
+--
+-- Why no `bookmark_tags_au`:
+--   The composite PK (bookmark_id, tag_id) means an "update" is logically
+--   a delete + insert. SQLite does not allow updating a row's PK in
+--   place. The two-trigger set (AI + AD) covers every possible mutation.
+--
+-- Timestamp resolution caveat:
+--   `strftime('%s','now')` returns whole seconds. We cast to integer and
+--   multiply by 1000 to match Drift's int-milliseconds-since-epoch
+--   convention. The queue's `created_at` is therefore second-aligned
+--   (not sub-millisecond like `bookmarks.updated_at`). The snapshot
+--   model does not read this timestamp for correctness -- it's an
+--   ordering aid for tests and a diagnostic for debugging. Second
+--   resolution is sufficient.
+--
+-- Notes on what is NOT here:
+--   * Triggers MUST NOT touch `bookmarks_fts` (Story 3.1 owns that table).
+--     `test/core/database/sync_queue_write_guard_test.dart` enforces the
+--     cross-trigger isolation invariant in both directions: FTS triggers
+--     do not write to `sync_queue` (Epic 3 AC10), and sync triggers do
+--     not write to `bookmarks_fts` (Story 4.2 new).
+--   * `payload` is always NULL. The queue is a "something changed"
+--     signal, not a delta log -- the whole-snapshot upload model means
+--     full state is uploaded regardless of which entities are in the
+--     queue. The column exists for a potential future v8 schema that
+--     wants richer per-mutation diagnostics.
+
+CREATE TRIGGER IF NOT EXISTS bookmarks_sync_ai AFTER INSERT ON bookmarks BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('upsert', 'bookmark', NEW.id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;
+
+CREATE TRIGGER IF NOT EXISTS bookmarks_sync_au AFTER UPDATE ON bookmarks BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('upsert', 'bookmark', NEW.id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;
+
+CREATE TRIGGER IF NOT EXISTS bookmarks_sync_ad AFTER DELETE ON bookmarks BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('delete', 'bookmark', OLD.id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;
+
+CREATE TRIGGER IF NOT EXISTS folders_sync_ai AFTER INSERT ON folders BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('upsert', 'folder', NEW.id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;
+
+CREATE TRIGGER IF NOT EXISTS folders_sync_au AFTER UPDATE ON folders BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('upsert', 'folder', NEW.id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;
+
+CREATE TRIGGER IF NOT EXISTS folders_sync_ad AFTER DELETE ON folders BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('delete', 'folder', OLD.id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_sync_ai AFTER INSERT ON tags BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('upsert', 'tag', NEW.id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_sync_au AFTER UPDATE ON tags BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('upsert', 'tag', NEW.id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_sync_ad AFTER DELETE ON tags BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('delete', 'tag', OLD.id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;
+
+CREATE TRIGGER IF NOT EXISTS bookmark_tags_sync_ai AFTER INSERT ON bookmark_tags BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('upsert', 'bookmark', NEW.bookmark_id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;
+
+CREATE TRIGGER IF NOT EXISTS bookmark_tags_sync_ad AFTER DELETE ON bookmark_tags BEGIN
+  INSERT INTO sync_queue (operation, entity_type, entity_id, payload, created_at)
+  VALUES ('upsert', 'bookmark', OLD.bookmark_id, NULL,
+          CAST(strftime('%s','now') AS INTEGER) * 1000);
+END;

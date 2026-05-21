@@ -31,6 +31,9 @@ import '../../features/folders/application/folder_providers.dart';
 import '../../features/search/application/search_providers.dart';
 import '../../features/search/presentation/widgets/search_bar.dart';
 import '../../features/search/presentation/widgets/search_results_screen.dart';
+import '../drive/drive_auth_providers.dart';
+import '../drive/drive_auth_state.dart';
+import '../drive/drive_sync_providers.dart';
 import '../router/app_router.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
@@ -272,7 +275,18 @@ class AppShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Shortcuts(
+    // Story 4.2: activate the sync auto-push orchestrator and the app
+    // lifecycle observer. Both pieces are side-effect-only -- the
+    // orchestrator's Provider<void> sets up internal listeners on first
+    // read; the lifecycle observer hooks `AppLifecycleState.resumed` so
+    // a foregrounded app drains any pending queue. Read here (rather
+    // than in app.dart) so both pieces live and die with the
+    // sign-in-required surface -- when the user is on /welcome (auth
+    // disconnected), AppShell isn't mounted and neither is needed.
+    ref.watch(autoPushOrchestratorProvider);
+
+    return _SyncLifecycleObserver(
+      child: Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{
         SingleActivator(LogicalKeyboardKey.keyN, meta: true):
             AddBookmarkIntent(),
@@ -471,8 +485,52 @@ class AppShell extends ConsumerWidget {
           ),
         ),
       ),
+      ),
     );
   }
+}
+
+/// Story 4.2: app-lifecycle observer that triggers a sync push when the
+/// app is foregrounded. A `WidgetsBindingObserver` is the canonical
+/// Flutter idiom; wrapping it in this small widget keeps `AppShell`
+/// stateless and lets us keep the observer scoped to the connected
+/// surface (the /welcome route mounts no AppShell, so no observer is
+/// registered there). Connectivity-restored will become the fourth
+/// trigger in Story 4.5 -- this observer is intentionally narrow.
+class _SyncLifecycleObserver extends ConsumerStatefulWidget {
+  const _SyncLifecycleObserver({required this.child});
+
+  final Widget child;
+
+  @override
+  ConsumerState<_SyncLifecycleObserver> createState() =>
+      _SyncLifecycleObserverState();
+}
+
+class _SyncLifecycleObserverState extends ConsumerState<_SyncLifecycleObserver>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    final authState = ref.read(driveAuthStateProvider).value;
+    if (authState is! DriveAuthConnected) return;
+    ref.read(driveSyncServiceProvider).push(fileId: authState.fileId);
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// Pointer-down focus reclaimer for AppShell's shortcut subtree.

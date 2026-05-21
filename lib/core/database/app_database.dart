@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
 import 'fts_schema.dart';
+import 'sync_triggers_schema.dart';
 import 'tables/bookmark_tags.dart';
 import 'tables/bookmarks.dart';
 import 'tables/folders.dart';
@@ -17,6 +18,10 @@ part 'app_database.g.dart';
 // Story 3.1 added: bookmarks_fts (FTS5 virtual table) + 5 sync triggers,
 //   defined in `drift_files/bookmarks_fts.drift` (documentation) and
 //   executed via customStatement from `fts_schema.dart` constants.
+// Story 4.2 added: 11 outbox triggers populating sync_queue on user
+//   mutations, defined in `drift_files/sync_triggers.drift` (documentation)
+//   and executed via customStatement from `sync_triggers_schema.dart`
+//   constants.
 
 @DriftDatabase(tables: [Bookmarks, Folders, SyncQueue, Tags, BookmarkTags])
 class AppDatabase extends _$AppDatabase {
@@ -25,7 +30,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.e);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -47,6 +52,15 @@ class AppDatabase extends _$AppDatabase {
           // 'rebuild' step is skipped on a fresh install -- there are no
           // rows to backfill, and the triggers are no-op on an empty table.
           for (final stmt in kFtsCreateStatements) {
+            await customStatement(stmt);
+          }
+          // Story 4.2: 11 outbox triggers populating sync_queue on user
+          // mutations. Order: `m.createAll()` above created bookmarks /
+          // folders / tags / bookmark_tags / sync_queue, all of which the
+          // sync triggers reference. The sync triggers do not depend on
+          // the FTS table, so the FTS / sync install order is arbitrary,
+          // but stable order makes test assertions easier.
+          for (final stmt in kSyncTriggersCreateStatements) {
             await customStatement(stmt);
           }
         },
@@ -167,6 +181,21 @@ class AppDatabase extends _$AppDatabase {
               await customStatement(stmt);
             }
             await customStatement(kFtsBackfillStatement);
+          }
+          if (from < 7) {
+            // Story 4.2: install 11 outbox triggers populating sync_queue
+            // on user mutations of bookmarks / folders / tags /
+            // bookmark_tags. No data backfill -- sync_queue is allowed to
+            // start empty on the migrating device; whatever they have
+            // locally either pushes on the next user mutation or stays
+            // local until they touch something.
+            //
+            // Idempotence: each CREATE TRIGGER uses `IF NOT EXISTS` so
+            // re-running this block (e.g. a recovered-from-corruption
+            // device replaying the migration) is safe.
+            for (final stmt in kSyncTriggersCreateStatements) {
+              await customStatement(stmt);
+            }
           }
         },
       );

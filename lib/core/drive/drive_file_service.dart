@@ -104,7 +104,13 @@ class DriveFileService {
     }
   }
 
-  static String _emptyBookmarksJson() => jsonEncode({
+  static String _emptyBookmarksJson() => emptyBookmarksJson();
+
+  /// The exact JSON string `DriveFileService` writes when it provisions a
+  /// new `bookmarks.json` in `appDataFolder` (Story 4.1). Exposed for
+  /// Story 4.2's forward-compat round-trip test on `DriveBookmarksFile`.
+  @visibleForTesting
+  static String emptyBookmarksJson() => jsonEncode({
         'version': 1,
         'lastModified': DateTime.now().toUtc().toIso8601String(),
         'bookmarks': const <Object>[],

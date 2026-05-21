@@ -1,0 +1,16 @@
+targets:
+  $default:
+    builders:
+      # Story 4.2: configure json_serializable so DriveBookmarksFile and its
+      # children (the Drive JSON envelope at `lib/core/drive/models/`) omit
+      # null fields from the on-wire JSON and use explicit nested toJson
+      # calls. The envelope's optional fields (`notes`, `folderId`,
+      # `faviconBase64`, `parentId`) MUST be absent when null, per the v1
+      # contract in `docs/sync-model.md` -- this is enforced project-wide
+      # because Freezed v3 strips per-class `@JsonSerializable(includeIfNull:
+      # false)` annotations when an abstract class is used with auto-
+      # generated JSON support.
+      json_serializable:
+        options:
+          include_if_null: false
+          explicit_to_json: true

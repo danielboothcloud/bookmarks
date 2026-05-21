@@ -10,6 +10,7 @@ import '../../features/tags/application/tag_providers.dart';
 import '../../features/tags/presentation/widgets/tag_list.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
+import 'sync_status_indicator.dart';
 
 class Sidebar extends ConsumerWidget {
   const Sidebar({
@@ -159,65 +160,10 @@ class Sidebar extends ConsumerWidget {
                   initialLocation: _settingsItem.branchIndex == selected,
                 ),
               ),
-              _SyncStatusIndicator(
-                // TODO(story-4.1): wire to real DriveSyncStatus provider.
-                status: SyncStatus.unavailable,
-                collapsed: collapsed,
-              ),
+              SyncStatusIndicator(collapsed: collapsed),
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-enum SyncStatus { synced, unsynced, unavailable }
-
-class _SyncStatusIndicator extends StatelessWidget {
-  const _SyncStatusIndicator({required this.status, required this.collapsed});
-
-  final SyncStatus status;
-  final bool collapsed;
-
-  @override
-  Widget build(BuildContext context) {
-    final (color, label) = switch (status) {
-      SyncStatus.synced => (AppColors.syncSynced, 'Drive: synced'),
-      SyncStatus.unsynced => (AppColors.syncUnsynced, 'Drive: pending'),
-      SyncStatus.unavailable => (AppColors.syncUnavailable, 'Drive: not connected'),
-    };
-    final dot = Container(
-      width: 8,
-      height: 8,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-      ),
-    );
-    if (collapsed) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-        child: Center(child: dot),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      child: Row(
-        children: [
-          dot,
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: Text(
-              label,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 11,
-                color: AppColors.textSidebar,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

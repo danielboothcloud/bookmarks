@@ -217,8 +217,11 @@ void main() {
     expect(await matchBookmarkIds('flutter'), isEmpty);
   });
 
-  test('cascading delete from BookmarkRepository.delete cleans the FTS row '
-      'AND keeps sync_queue empty', () async {
+  test(
+      'cascading delete from BookmarkRepository.delete cleans the FTS row '
+      '(post-4.2: the user mutation enqueues sync_queue rows; the FTS '
+      'triggers do not -- isolation tested in sync_queue_write_guard_test)',
+      () async {
     await bookmarkRepo.save(mkBookmark(id: 'bm-1', title: 'Doomed'));
     final tagResult = await tagRepo.upsertByName('flutter');
     final tag = (tagResult as dynamic).value as Tag;
@@ -230,14 +233,6 @@ void main() {
     expect(await ftsRowsForBookmark('bm-1'), 0);
     final junctions = await db.select(db.bookmarkTags).get();
     expect(junctions, isEmpty);
-    final syncRows = await db
-        .customSelect(
-          'SELECT COUNT(*) AS n FROM sync_queue',
-          variables: <Variable<Object>>[],
-        )
-        .getSingle();
-    expect(syncRows.read<int>('n'), 0,
-        reason: 'FTS triggers must NOT collude with the sync_queue table');
   });
 
   test('cascading delete from FolderRepository.deleteCascade cleans FTS rows '
@@ -260,13 +255,12 @@ void main() {
     expect(await ftsRowsForBookmark('bm-b'), 0);
     final junctions = await db.select(db.bookmarkTags).get();
     expect(junctions, isEmpty);
-    final syncRows = await db
-        .customSelect(
-          'SELECT COUNT(*) AS n FROM sync_queue',
-          variables: <Variable<Object>>[],
-        )
-        .getSingle();
-    expect(syncRows.read<int>('n'), 0);
+    // Post-4.2: user-initiated cascade delete WILL enqueue sync_queue
+    // rows via the sync triggers (asserted in
+    // sync_queue_write_guard_test.dart). The FTS triggers themselves
+    // still must not write to sync_queue -- that cross-trigger
+    // isolation invariant is asserted by both `sync_queue_write_guard_test`
+    // and `migration_v6_to_v7_test` (FTS rebuild produces zero rows).
   });
 
   test('MATCH with prefix returns expected bookmarks', () async {
