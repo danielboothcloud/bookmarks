@@ -40,6 +40,7 @@ class SyncStatusIndicator extends ConsumerWidget {
     );
     if (label == null) return const SizedBox.shrink();
 
+    final baseStyle = Theme.of(context).textTheme.bodySmall;
     return Padding(
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.md,
@@ -51,9 +52,8 @@ class SyncStatusIndicator extends ConsumerWidget {
         child: Text(
           label,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 11,
-            color: AppColors.textSidebar,
+          style: (baseStyle ?? const TextStyle()).copyWith(
+            color: AppColors.textMuted,
           ),
         ),
       ),

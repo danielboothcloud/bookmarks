@@ -83,7 +83,19 @@ class DriveSyncService {
   Future<Result<void, AppError>>? _inFlight;
   bool _disposed = false;
 
-  Stream<SyncStatus> watchStatus() => _statusController.stream;
+  /// Status stream that prepends [currentStatus] for late subscribers.
+  ///
+  /// `StreamController.broadcast(sync: true)` does not replay past emits,
+  /// so a subscriber that attaches after the engine's first `_emit()` (or
+  /// before any emit has happened) would otherwise observe nothing until
+  /// the next status change — the `SyncStatusIndicator` would render
+  /// `SizedBox.shrink()` instead of "Synced with Drive" on first paint.
+  /// Yielding [currentStatus] as the first event closes that gap without
+  /// changing broadcast semantics for follow-on emits.
+  Stream<SyncStatus> watchStatus() async* {
+    yield _lastEmitted;
+    yield* _statusController.stream;
+  }
 
   /// Snapshot of the most-recent status emitted on the stream. Used by
   /// new subscribers that miss the broadcast.
@@ -149,6 +161,17 @@ class DriveSyncService {
       final file = await _snapshotBuilder.build();
       final jsonBytes = utf8.encode(jsonEncode(file.toJson()));
 
+      // Each `authenticatedClient` call subscribes to its own
+      // `credentialUpdates` stream and closes it on `client.close()`. If
+      // the gate-opening first-connect probe ran above, this is the
+      // second such subscription within the same `push()` call. Both are
+      // short-lived (built + closed inside try/finally) so they never
+      // overlap a token-refresh window for the same call site; the only
+      // risk is a Google-side refresh-token rotation happening between
+      // the probe's GET and this PATCH, in which case `writeRefreshed`
+      // would persist whichever subscription's update lands last (a no-
+      // op equivalence at the wire level — both subs persist identical
+      // values).
       final authClient = await _credentials.authenticatedClient(_httpClient);
       if (authClient == null) {
         const err = AuthError('No Drive credentials available');

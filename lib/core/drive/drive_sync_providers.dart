@@ -68,9 +68,12 @@ final syncQueuePendingCountProvider = StreamProvider<int>((ref) {
 ///   2. Drive transitioned `_ -> connected`.
 ///   3. (Story 4.5 will add connectivity-restored as a fourth trigger.)
 ///
-/// Read for side effects from `BookmarksApp` (lib/app.dart) at startup
-/// via `ref.watch(autoPushOrchestratorProvider)`. The provider has no
-/// public value -- the side effects are the point.
+/// Read for side effects from `AppShell.build()` (lib/core/widgets/
+/// app_shell.dart) via `ref.watch(autoPushOrchestratorProvider)`. Scoped
+/// to AppShell rather than `lib/app.dart` so the listeners live and die
+/// with the sign-in-required surface — the /welcome route mounts no
+/// AppShell, so the orchestrator is dormant before connect. The provider
+/// has no public value; the side effects are the point.
 ///
 /// The third trigger from the story (explicit API call from tests / a
 /// future "Sync now" button) doesn't need a listener -- callers grab
