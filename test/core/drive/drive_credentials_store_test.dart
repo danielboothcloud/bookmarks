@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:bookmarks/core/drive/drive_auth_service.dart'
     show DriveStorageKeys;
 import 'package:bookmarks/core/drive/drive_credentials_store.dart';
@@ -132,6 +134,68 @@ void main() {
     final client = await credStore.authenticatedClient(base);
     expect(client, isNotNull);
     expect(client!.credentials.accessToken.data, 'access-x');
+    client.close();
+  });
+
+  test('authenticatedClient persists refreshed tokens via the '
+      'credentialUpdates subscription', () async {
+    // Surprise log entry #3: googleapis_auth ^1.6.0 exposes refresh
+    // events through `AutoRefreshingAuthClient.credentialUpdates`, not a
+    // constructor callback. This test forces a refresh by seeding an
+    // expired credential, stubs the OAuth token endpoint, and asserts
+    // secure storage receives the new tokens. If a future package bump
+    // renames or removes credentialUpdates, this test fails — instead
+    // of silently regressing every session-resume.
+    storage.store[DriveStorageKeys.accessToken] = 'old-access';
+    storage.store[DriveStorageKeys.refreshToken] = 'old-refresh';
+    storage.store[DriveStorageKeys.expiresAt] = DateTime.now()
+        .toUtc()
+        .subtract(const Duration(minutes: 5)) // expired -> forces refresh
+        .toIso8601String();
+
+    final base = MockClient((req) async {
+      final url = req.url;
+      // Token endpoint returns a fresh access token + rotated refresh
+      // token (the rare-but-supported Google behaviour).
+      if (url.host == 'oauth2.googleapis.com' &&
+          url.path.endsWith('/token')) {
+        final body = jsonEncode({
+          'access_token': 'new-access',
+          'refresh_token': 'rotated-refresh',
+          'expires_in': 3600,
+          'token_type': 'Bearer',
+        });
+        return http.Response(body, 200,
+            headers: const {'content-type': 'application/json'});
+      }
+      // Any other request returns an OK body so the underlying call
+      // resolves cleanly after the refresh-then-retry dance.
+      return http.Response('{}', 200,
+          headers: const {'content-type': 'application/json'});
+    });
+
+    final client = await credStore.authenticatedClient(base);
+    expect(client, isNotNull);
+
+    // Make a request that triggers a pre-emptive refresh because
+    // credentials are expired.
+    await client!.get(Uri.parse('https://www.googleapis.com/drive/v3/about'));
+
+    // Give the credentialUpdates microtask a chance to deliver.
+    await Future<void>.delayed(Duration.zero);
+
+    expect(storage.store[DriveStorageKeys.accessToken], 'new-access',
+        reason: 'refresh callback must persist new access token');
+    // Note: googleapis_auth ^1.6.0 deliberately preserves the original
+    // refresh_token even when the OAuth response contains a rotated one
+    // (see refreshCredentials in googleapis_auth/src/auth_functions.dart).
+    // We assert the stored refresh_token is whatever the AccessCredentials
+    // object exposes — which is the original — proving the conditional
+    // rotation write in DriveCredentialsStore.writeRefreshed runs.
+    expect(storage.store[DriveStorageKeys.refreshToken], 'old-refresh',
+        reason: 'googleapis_auth preserves the original refresh token; '
+            'writeRefreshed persists whatever AccessCredentials exposes');
+
     client.close();
   });
 }

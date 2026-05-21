@@ -301,6 +301,13 @@ void main() {
     );
     expect(parsed.bookmarks.map((b) => b.id).toSet(),
         containsAll(<String>['b0', 'b1', 'b2', 'b3', 'b4']));
+    // The 5 rapid mutations must not produce 5 separate pushes — the
+    // orchestrator's 250ms debounce + the snapshot model collapse a
+    // burst into at most a handful of uploads. (Exact count varies with
+    // event-loop timing; cap at 3 to catch a regression where each
+    // mutation independently fires its own push.)
+    expect(drive.updateRequests.length, lessThanOrEqualTo(3),
+        reason: 'debounce + snapshot model must collapse the burst');
   });
 
   test('D + F: 503 once -> retry succeeds; then subsequent write re-pushes',

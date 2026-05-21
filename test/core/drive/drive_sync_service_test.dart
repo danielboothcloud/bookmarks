@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show SocketException;
 
 import 'package:bookmarks/core/database/app_database.dart';
 import 'package:bookmarks/core/database/sync_queue_repository.dart';
@@ -147,6 +148,67 @@ class _FakeDriveServer {
   }
 }
 
+/// Fake Drive server whose GET (probe) responses are scripted by HTTP
+/// status code. Each probe attempt consumes the next entry in
+/// [probeStatuses]; once exhausted, falls back to 200 with the empty v1
+/// envelope. PATCH (upload) calls default to 200 with file metadata.
+class _ProbingFakeServer {
+  _ProbingFakeServer({required this.probeStatuses});
+
+  final List<int> probeStatuses;
+  int probeGetCount = 0;
+
+  static final String _emptyEnvelope = jsonEncode({
+    'version': 1,
+    'lastModified': '2026-05-20T00:00:00.000Z',
+    'bookmarks': <Object>[],
+    'folders': <Object>[],
+    'tags': <Object>[],
+  });
+
+  http.Client buildClient() {
+    return MockClient.streaming((request, bodyStream) async {
+      final url = request.url;
+      if (request.method == 'GET' &&
+          url.path.startsWith('/drive/v3/files/')) {
+        probeGetCount++;
+        final status =
+            probeStatuses.isNotEmpty ? probeStatuses.removeAt(0) : 200;
+        // googleapis parses application/json bodies on non-2xx into
+        // DetailedApiRequestError; with malformed JSON the decoder
+        // throws FormatException which DriveRetryPolicy does NOT
+        // classify as transient. Wrap the error body as valid JSON so
+        // the 500/503 path lands on DetailedApiRequestError(status).
+        final body = status == 200
+            ? _emptyEnvelope
+            : jsonEncode({
+                'error': {'code': status, 'message': 'transient'},
+              });
+        return http.StreamedResponse(
+          Stream<List<int>>.value(utf8.encode(body)),
+          status,
+          headers: const {'content-type': 'application/json'},
+        );
+      }
+      if (url.path.startsWith('/upload/drive/v3/files/')) {
+        await bodyStream
+            .fold<List<int>>(<int>[], (acc, chunk) => acc..addAll(chunk));
+        return http.StreamedResponse(
+          Stream<List<int>>.value(
+              utf8.encode('{"id":"file-1","name":"bookmarks.json"}')),
+          200,
+          headers: const {'content-type': 'application/json'},
+        );
+      }
+      return http.StreamedResponse(
+        Stream<List<int>>.value(utf8.encode('{}')),
+        200,
+        headers: const {'content-type': 'application/json'},
+      );
+    });
+  }
+}
+
 /// Test retry policy with near-zero delays so retry tests don't take seconds.
 const _fastRetry = DriveRetryPolicy(
   maxAttempts: 3,
@@ -247,40 +309,78 @@ void main() {
     // Queue drained.
     expect(await SyncQueueRepository(db).drain(), isEmpty);
 
-    expect(statuses.whereType<SyncPushing>(), hasLength(greaterThanOrEqualTo(1)));
-    expect(statuses.whereType<SyncSynced>(), hasLength(greaterThanOrEqualTo(1)));
+    // Order discipline: pushing must arrive before synced. A regression
+    // that flips the order (e.g. emit synced inside _pushInternal before
+    // the upload actually completed) would silently slip past a length-
+    // only check.
+    final pushingIdx = statuses.indexWhere((s) => s is SyncPushing);
+    final syncedIdx = statuses.indexWhere((s) => s is SyncSynced);
+    expect(pushingIdx, isNonNegative, reason: 'must emit pushing');
+    expect(syncedIdx, greaterThan(pushingIdx),
+        reason: 'synced must follow pushing, not precede it');
 
     await sub.cancel();
   });
 
-  test('rows inserted between drain() and upload survive the selective delete',
+  test('watchStatus replays the most recent status to a late subscriber',
       () async {
-    await _seedBookmark(db, 'b1');
-    final originalIds = (await SyncQueueRepository(db).drain())
-        .map((r) => r.id)
-        .toSet();
+    // H2 regression: broadcast(sync: true) does NOT replay to late
+    // subscribers. The service prepends `currentStatus` so the indicator
+    // can render "Synced with Drive" on first paint instead of an empty
+    // gap. Subscribe BEFORE any push and assert the seed lands.
+    final first = await service.watchStatus().first;
+    expect(first, isA<SyncIdle>(),
+        reason: 'initial subscriber must observe the seed idle state');
 
-    // Script the update endpoint to insert another queue row before
-    // returning 200.
+    // Drive a push, then attach a NEW subscriber and assert it
+    // observes the most-recent state (not nothing).
+    await _seedBookmark(db, 'b1');
+    await service.push(fileId: 'file-id-1');
+    final late = await service.watchStatus().first;
+    expect(late, isA<SyncSynced>(),
+        reason: 'late subscriber must observe the most-recent emit');
+  });
+
+  test('push() drains only the IDs captured at drain start — rows that '
+      'arrive between drain and upload survive into the next cycle',
+      () async {
+    // AC3 step (f): the engine deletes only the originally-captured IDs
+    // after upload succeeds. Rows inserted by an arriving mutation after
+    // the snapshot was drained must persist for the next push.
+    await _seedBookmark(db, 'b1');
+    final repo = SyncQueueRepository(db);
+    final originalIds = (await repo.drain()).map((r) => r.id).toSet();
+    expect(originalIds, hasLength(1));
+
+    // Insert a 2nd queue row WHILE the upload is "in flight" by hooking
+    // the fake server's update handler. The synchronous side-effect
+    // model: the http call body has been read; before returning 200, the
+    // script inserts another sync_queue row. From the engine's point of
+    // view this row arrived after drain() and must survive deleteByIds.
     server.updateScript.add(() {
-      // Synchronous insert via raw sqlite is not available here, so we
-      // simulate by adding the future-row-insertion BEFORE the push.
-      // Instead, manually seed a 2nd row before push fires, simulating
-      // a write that arrived AFTER the drain.
+      // Fire-and-forget the insert; the response is returned immediately.
+      // The customStatement future will resolve before the engine's
+      // deleteByIds runs because both share the same event loop and the
+      // insert is sync enough for sqlite.
+      // ignore: discarded_futures
+      db.customStatement(
+        "INSERT INTO sync_queue (operation, entity_type, entity_id, "
+        "payload, created_at) VALUES ('upsert', 'bookmark', 'b-mid', "
+        'NULL, 9999999)',
+      );
       return http.Response('{"id":"f1"}', 200,
           headers: const {'content-type': 'application/json'});
     });
 
-    // For a deterministic test: drain manually, insert a 2nd row, then
-    // call deleteByIds with only the first id.
-    final repo = SyncQueueRepository(db);
-    await _seedBookmark(db, 'b2');
-    final allIds = (await repo.drain()).map((r) => r.id).toSet();
-    final newIds = allIds.difference(originalIds);
-    expect(newIds, hasLength(1));
+    final result = await service.push(fileId: 'file-id-1');
+    expect(result, isA<Ok<void, AppError>>());
 
-    await repo.deleteByIds(originalIds.toList());
-    expect((await repo.drain()).map((r) => r.id).toSet(), newIds);
+    // The originally captured row was deleted; the row inserted during
+    // the upload survives.
+    final remaining = await repo.drain();
+    expect(remaining, hasLength(1),
+        reason: 'mid-upload insert must survive selective delete');
+    expect(remaining.single.entityId, 'b-mid');
   });
 
   test('Drive returns 500 once then 200: retry, emits synced, queue drained',
@@ -398,6 +498,91 @@ void main() {
     expect(storage.store.containsKey(kDriveLastPulledAtKey), isFalse);
     expect(server.updateRequests, isEmpty);
     expect(statuses.whereType<SyncAwaitingInitialPull>(), isNotEmpty);
+
+    await sub.cancel();
+  });
+
+  test('first-connect probe upload failure leaves gate closed and the next '
+      'push retries the probe', () async {
+    // Task 10 bullet 7: probe transient failure must not half-set the
+    // gate, and the next push must re-attempt the probe (not pass it
+    // through as already-checked).
+    storage.store.remove(kDriveLastPulledAtKey);
+
+    // First call: probe GET returns 500 three times -> retry exhausts ->
+    // mapped to NetworkError. The fake server's `getRequests` records
+    // the attempts so we can count probe re-attempts on the next push.
+    // Build a server whose probe responses are scripted.
+    final probeServer = _ProbingFakeServer(
+      probeStatuses: [500, 500, 500, 200],
+    );
+    final probeService = _buildService(
+      db: db,
+      storage: storage,
+      client: probeServer.buildClient(),
+    );
+    addTearDown(probeService.dispose);
+
+    final first = await probeService.push(fileId: 'file-id-1');
+    expect(first, isA<Err<void, AppError>>(),
+        reason: 'probe retry-exhausted should bubble up as Err');
+    expect(storage.store.containsKey(kDriveLastPulledAtKey), isFalse,
+        reason: 'gate must stay closed when the probe fails');
+    expect(probeServer.probeGetCount, 3,
+        reason: 'retry policy fires 3 attempts on transient failure');
+
+    // Second push: probe is re-attempted (not skipped). The 4th scripted
+    // response is 200 with an empty envelope, so the probe opens the
+    // gate and a push proceeds.
+    await _seedBookmark(db, 'b1');
+    final second = await probeService.push(fileId: 'file-id-1');
+    expect(second, isA<Ok<void, AppError>>(),
+        reason: 'next push re-probes and, with a 200, proceeds');
+    expect(storage.store[kDriveLastPulledAtKey], isNotNull);
+    expect(probeServer.probeGetCount, 4,
+        reason: 'one additional probe attempt landed on the next push');
+  });
+
+  test('mid-upload stream EOF is treated as transient: retry succeeds and '
+      'synced is emitted only after the retry succeeds', () async {
+    // Task 10 bullet 10: a mid-upload SocketException-equivalent EOF
+    // must NOT leak a premature synced emit; the engine emits pushing
+    // once, retries inside DriveRetryPolicy, and only emits synced when
+    // the retry's 200 response lands.
+    await _seedBookmark(db, 'b1');
+
+    var attempt = 0;
+    final eofServer = _FakeDriveServer();
+    eofServer.updateScript.add(() {
+      attempt++;
+      // Simulate mid-stream EOF as a thrown SocketException — the
+      // retry policy classifies SocketException as transient.
+      throw const SocketException('mid-upload EOF');
+    });
+    // Second attempt: default 200 fall-through.
+
+    final eofService = _buildService(
+      db: db,
+      storage: storage,
+      client: eofServer.buildClient(),
+    );
+    addTearDown(eofService.dispose);
+
+    final statuses = <SyncStatus>[];
+    final sub = eofService.watchStatus().listen(statuses.add);
+
+    final result = await eofService.push(fileId: 'file-id-1');
+    expect(result, isA<Ok<void, AppError>>());
+    expect(attempt, 1, reason: 'first attempt threw');
+    expect(eofServer.updateRequests, hasLength(2),
+        reason: 'retry produced a second wire-level attempt');
+
+    // One pushing emit. Exactly one synced emit, AFTER pushing, AFTER
+    // the second-attempt response.
+    expect(statuses.whereType<SyncPushing>(), hasLength(1));
+    expect(statuses.whereType<SyncSynced>(), hasLength(1));
+    expect(statuses.whereType<SyncFailed>(), isEmpty,
+        reason: 'transient retry must not leak failed mid-flight');
 
     await sub.cancel();
   });
