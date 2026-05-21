@@ -526,7 +526,10 @@ class _SyncLifecycleObserverState extends ConsumerState<_SyncLifecycleObserver>
     if (state != AppLifecycleState.resumed) return;
     final authState = ref.read(driveAuthStateProvider).value;
     if (authState is! DriveAuthConnected) return;
-    ref.read(driveSyncServiceProvider).push(fileId: authState.fileId);
+    // Story 4.3: resume now triggers a full sync cycle (pull-then-push)
+    // rather than push only, so foregrounding the app surfaces remote
+    // changes from other devices without an explicit user action.
+    ref.read(driveSyncServiceProvider).sync(fileId: authState.fileId);
   }
 
   @override

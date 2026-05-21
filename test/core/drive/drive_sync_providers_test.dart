@@ -4,8 +4,6 @@ import 'package:bookmarks/core/database/app_database.dart';
 import 'package:bookmarks/core/database/sync_queue_repository.dart';
 import 'package:bookmarks/core/drive/drive_auth_providers.dart';
 import 'package:bookmarks/core/drive/drive_auth_state.dart';
-import 'package:bookmarks/core/drive/drive_credentials_store.dart';
-import 'package:bookmarks/core/drive/drive_snapshot_builder.dart';
 import 'package:bookmarks/core/drive/drive_sync_providers.dart';
 import 'package:bookmarks/core/drive/drive_sync_service.dart';
 import 'package:bookmarks/core/error/app_error.dart';
@@ -16,12 +14,26 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingSyncService implements DriveSyncService {
+  final List<String> syncedFileIds = [];
   final List<String> pushedFileIds = [];
+  final List<String> pulledFileIds = [];
   final _controller = StreamController<dynamic>.broadcast();
+
+  @override
+  Future<Result<void, AppError>> sync({required String fileId}) async {
+    syncedFileIds.add(fileId);
+    return const Ok<void, AppError>(null);
+  }
 
   @override
   Future<Result<void, AppError>> push({required String fileId}) async {
     pushedFileIds.add(fileId);
+    return const Ok<void, AppError>(null);
+  }
+
+  @override
+  Future<Result<void, AppError>> pull({required String fileId}) async {
+    pulledFileIds.add(fileId);
     return const Ok<void, AppError>(null);
   }
 
@@ -77,7 +89,7 @@ void main() {
     await db.close();
   });
 
-  test('queue insert fires push within ~300ms when auth is connected',
+  test('queue insert fires sync() within ~300ms when auth is connected',
       () async {
     final container = _buildContainer(
       db: db,
@@ -89,23 +101,21 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    // Activate the orchestrator + the pending-count stream subscriber.
     container.read(autoPushOrchestratorProvider);
     container.read(syncQueuePendingCountProvider);
 
-    // Seed a row directly into sync_queue (bypassing repos to avoid
-    // an entire stack of dependencies).
     await db.customStatement(
       "INSERT INTO sync_queue (operation, entity_type, entity_id, payload, "
       "created_at) VALUES ('upsert', 'bookmark', 'b1', NULL, 1)",
     );
 
-    // 250ms debounce + slack.
     await Future<void>.delayed(const Duration(milliseconds: 400));
-    expect(service.pushedFileIds, ['fake-file-id']);
+    expect(service.syncedFileIds, ['fake-file-id']);
+    expect(service.pushedFileIds, isEmpty,
+        reason: 'orchestrator now calls sync(), not push()');
   });
 
-  test('queue insert does NOT fire push when auth is disconnected',
+  test('queue insert does NOT fire sync() when auth is disconnected',
       () async {
     final container = _buildContainer(
       db: db,
@@ -123,10 +133,10 @@ void main() {
     );
 
     await Future<void>.delayed(const Duration(milliseconds: 400));
-    expect(service.pushedFileIds, isEmpty);
+    expect(service.syncedFileIds, isEmpty);
   });
 
-  test('auth-state transition into connected triggers a push', () async {
+  test('auth-state transition into connected triggers a sync()', () async {
     final notifier = _FakeDriveAuthNotifier(
       const DriveAuthState.disconnected(),
     );
@@ -139,19 +149,18 @@ void main() {
     addTearDown(container.dispose);
 
     container.read(autoPushOrchestratorProvider);
-    // Settle initial build.
     await Future<void>.delayed(const Duration(milliseconds: 10));
-    expect(service.pushedFileIds, isEmpty);
+    expect(service.syncedFileIds, isEmpty);
 
     notifier.set(const DriveAuthState.connected(
       email: 'x@y.com',
       fileId: 'connected-file-id',
     ));
     await Future<void>.delayed(const Duration(milliseconds: 50));
-    expect(service.pushedFileIds, ['connected-file-id']);
+    expect(service.syncedFileIds, ['connected-file-id']);
   });
 
-  test('rapid queue bursts within debounce window collapse to one push',
+  test('rapid queue bursts within debounce window collapse to one sync()',
       () async {
     final container = _buildContainer(
       db: db,
@@ -172,16 +181,14 @@ void main() {
         "created_at) VALUES ('upsert', 'bookmark', ?, NULL, 1)",
         ['b$i'],
       );
-      // Tiny delay so each insert is a distinct stream emission, but
-      // well within the 250ms debounce window.
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
     await Future<void>.delayed(const Duration(milliseconds: 400));
 
-    expect(service.pushedFileIds, hasLength(1),
-        reason: 'debounce should collapse the 5 bursts into a single push');
+    expect(service.syncedFileIds, hasLength(1),
+        reason:
+            'debounce should collapse the 5 bursts into a single sync()');
 
-    // Sanity: SyncQueueRepository sees all 5 rows.
     expect((await SyncQueueRepository(db).drain()), hasLength(5));
   });
 }

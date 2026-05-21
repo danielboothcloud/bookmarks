@@ -9,6 +9,7 @@ import 'drive_auth_state.dart';
 import 'drive_credentials_store.dart';
 import 'drive_snapshot_builder.dart';
 import 'drive_sync_service.dart';
+import 'merge_applier.dart';
 import 'oauth_config.dart';
 import 'sync_status.dart';
 
@@ -22,6 +23,14 @@ final syncQueueRepositoryProvider = Provider<SyncQueueRepository>((ref) {
 /// Snapshot builder. Reads the current local state into a v1 envelope.
 final driveSnapshotBuilderProvider = Provider<DriveSnapshotBuilder>((ref) {
   return DriveSnapshotBuilder(ref.watch(appDatabaseProvider));
+});
+
+/// Merge applier — Story 4.3. Owns the transactional pull-side write
+/// path: computes a per-record LWW plan via `MergeEngine`, then
+/// applies it inside a single Drift transaction with the post-merge
+/// `sync_queue` cursor cleanup.
+final mergeApplierProvider = Provider<MergeApplier>((ref) {
+  return MergeApplier(ref.watch(appDatabaseProvider));
 });
 
 /// Credentials store backed by the same secure-storage provider as the
@@ -46,6 +55,7 @@ final driveSyncServiceProvider = Provider<DriveSyncService>((ref) {
     credentials: ref.watch(driveCredentialsStoreProvider),
     storage: ref.watch(flutterSecureStorageProvider),
     httpClient: ref.watch(httpClientProvider),
+    mergeApplier: ref.watch(mergeApplierProvider),
   );
   ref.onDispose(service.dispose);
   return service;
@@ -63,9 +73,17 @@ final syncQueuePendingCountProvider = StreamProvider<int>((ref) {
   return ref.watch(syncQueueRepositoryProvider).watchPendingCount();
 });
 
-/// Side-effect provider that wires three push trigger events:
+/// Side-effect provider that wires three sync trigger events. Story
+/// 4.3 widens this from "auto-push" to "auto-sync": each trigger now
+/// invokes `sync()` (pull-then-push), so the orchestrator is the
+/// single dispatch point for the full sync cycle. The provider name
+/// remains `autoPushOrchestratorProvider` to keep the change scoped
+/// (rename touches a lot of test scaffolding) — semantically it is the
+/// auto-sync orchestrator.
+///
+/// Triggers:
 ///   1. Queue non-empty observation (debounced 250ms).
-///   2. Drive transitioned `_ -> connected`.
+///   2. Drive transitioned `_ -> connected` (cold start / re-connect).
 ///   3. (Story 4.5 will add connectivity-restored as a fourth trigger.)
 ///
 /// Read for side effects from `AppShell.build()` (lib/core/widgets/
@@ -74,10 +92,6 @@ final syncQueuePendingCountProvider = StreamProvider<int>((ref) {
 /// with the sign-in-required surface — the /welcome route mounts no
 /// AppShell, so the orchestrator is dormant before connect. The provider
 /// has no public value; the side effects are the point.
-///
-/// The third trigger from the story (explicit API call from tests / a
-/// future "Sync now" button) doesn't need a listener -- callers grab
-/// `driveSyncServiceProvider` and invoke `push()` directly.
 final autoPushOrchestratorProvider = Provider<void>((ref) {
   Timer? debounce;
 
@@ -92,7 +106,7 @@ final autoPushOrchestratorProvider = Provider<void>((ref) {
           if (auth is DriveAuthConnected) {
             ref
                 .read(driveSyncServiceProvider)
-                .push(fileId: auth.fileId);
+                .sync(fileId: auth.fileId);
           }
         });
       });
@@ -106,9 +120,10 @@ final autoPushOrchestratorProvider = Provider<void>((ref) {
         if (state is! DriveAuthConnected) return;
         // On transition into connected (any prior state, including a
         // re-emit of connected from a tab focus restoring the same id),
-        // attempt a push -- the first-connect probe inside push()
-        // handles the gate decision.
-        ref.read(driveSyncServiceProvider).push(fileId: state.fileId);
+        // run a full sync cycle. The pull half handles the gate
+        // decision (and the FR36 first-launch population path); the
+        // push half drains any pre-existing queue rows.
+        ref.read(driveSyncServiceProvider).sync(fileId: state.fileId);
       });
     },
   );

@@ -149,6 +149,7 @@ ProviderContainer _buildContainer({
           credentials: ref.watch(driveCredentialsStoreProvider),
           storage: ref.watch(flutterSecureStorageProvider),
           httpClient: ref.watch(httpClientProvider),
+          mergeApplier: ref.watch(mergeApplierProvider),
           retryPolicy: _fastRetry,
         );
       }),
@@ -213,8 +214,14 @@ void main() {
     expect(parsed.bookmarks.map((b) => b.id).toList(), ['b1']);
   });
 
-  test('B: first write with non-empty remote -> probe leaves gate closed -> '
-      'no upload', () async {
+  test('B (Story 4.3 revised): first write with non-empty remote -> sync '
+      'cycle merges remote, opens gate, and uploads the combined snapshot',
+      () async {
+    // 4.2 left this case stuck on awaitingInitialPull because the probe
+    // refused to open the gate against a non-empty remote. Story 4.3's
+    // sync() (pull-then-push) resolves the stuck state: the merge opens
+    // the gate, then the push uploads the combined local+remote
+    // snapshot. The orchestrator now dispatches sync(), not push().
     drive = _FakeDrive(
       initialRemoteJson: jsonEncode({
         'version': 1,
@@ -246,7 +253,10 @@ void main() {
     addTearDown(container.dispose);
 
     final emitted = <SyncStatus>[];
-    final sub = container.read(driveSyncServiceProvider).watchStatus().listen(emitted.add);
+    final sub = container
+        .read(driveSyncServiceProvider)
+        .watchStatus()
+        .listen(emitted.add);
     addTearDown(sub.cancel);
 
     container.read(autoPushOrchestratorProvider);
@@ -256,10 +266,20 @@ void main() {
     await repo.save(_bm('b1'));
     await Future<void>.delayed(const Duration(milliseconds: 500));
 
-    expect(drive.updateRequests, isEmpty,
-        reason: 'gate closed -> no upload');
-    expect(storage.store.containsKey(kDriveLastPulledAtKey), isFalse);
-    expect(emitted.whereType<SyncAwaitingInitialPull>(), isNotEmpty);
+    expect(storage.store.containsKey(kDriveLastPulledAtKey), isTrue,
+        reason: 'merge opens the gate');
+    expect(drive.updateRequests, isNotEmpty,
+        reason: 'post-merge push uploads the combined snapshot');
+    // Combined snapshot must contain both the local b1 and the merged
+    // remote-b — no data loss in either direction.
+    final parsed = DriveBookmarksFile.fromJson(
+      jsonDecode(_decodeUploadedJson(drive.updateRequests.last.body))
+          as Map<String, dynamic>,
+    );
+    expect(parsed.bookmarks.map((b) => b.id).toSet(),
+        equals(<String>{'b1', 'remote-b'}));
+    expect(emitted.whereType<SyncAwaitingInitialPull>(), isEmpty,
+        reason: '4.3 resolves the stuck state — no more awaitingInitialPull');
   });
 
   test('C: multiple mutations are eventually reflected in a push snapshot',

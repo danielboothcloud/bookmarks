@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart' show OrderingTerm;
 
 import '../database/app_database.dart';
+import 'local_snapshot.dart';
 import 'models/drive_bookmark.dart';
 import 'models/drive_bookmarks_file.dart';
 import 'models/drive_folder.dart';
@@ -20,6 +21,11 @@ import 'models/drive_tag.dart';
 /// then `id` ASC so a stable database produces byte-identical JSON
 /// across snapshot calls -- useful for tests and for diffing Drive
 /// revisions across versions.
+///
+/// Story 4.3: the read pass is exposed as [readLocalSnapshot] so the
+/// merge applier can use the same shape inside its own transaction.
+/// [build] keeps composing read + envelope-conversion for the push
+/// path.
 class DriveSnapshotBuilder {
   DriveSnapshotBuilder(
     this._db, {
@@ -36,60 +42,84 @@ class DriveSnapshotBuilder {
   /// so the snapshot is point-in-time consistent (no half-written
   /// junction rows).
   Future<DriveBookmarksFile> build() async {
-    final result = await _db.transaction(() async {
-      final bookmarkRows = await (_db.select(_db.bookmarks)
-            ..orderBy([
-              (t) => OrderingTerm.asc(t.createdAt),
-              (t) => OrderingTerm.asc(t.id),
-            ]))
-          .get();
-      final folderRows = await (_db.select(_db.folders)
-            ..orderBy([
-              (t) => OrderingTerm.asc(t.createdAt),
-              (t) => OrderingTerm.asc(t.id),
-            ]))
-          .get();
-      final tagRows = await (_db.select(_db.tags)
-            ..orderBy([
-              (t) => OrderingTerm.asc(t.createdAt),
-              (t) => OrderingTerm.asc(t.id),
-            ]))
-          .get();
-      final junctionRows = await (_db.select(_db.bookmarkTags)
-            ..orderBy([
-              (t) => OrderingTerm.asc(t.tagId),
-            ]))
-          .get();
+    final snapshot = await readLocalSnapshot();
+    return _toEnvelope(snapshot, _clock());
+  }
 
-      // Group junctions by bookmarkId for O(1) lookup during conversion.
-      final tagIdsByBookmark = <String, List<String>>{};
-      for (final j in junctionRows) {
-        tagIdsByBookmark
-            .putIfAbsent(j.bookmarkId, () => <String>[])
-            .add(j.tagId);
-      }
+  /// Reads the four tables inside a single transaction and returns a
+  /// [LocalSnapshot] — the same shape the merge engine consumes.
+  ///
+  /// Used by:
+  ///  * [build] (push path) — converts to [DriveBookmarksFile].
+  ///  * `MergeApplier` (pull path) — consumed directly by the merge
+  ///    engine; the applier reads INSIDE its own transaction so the
+  ///    snapshot is point-in-time-consistent with the writes that
+  ///    follow.
+  Future<LocalSnapshot> readLocalSnapshot() async {
+    return _db.transaction(_readLocalSnapshotInTxn);
+  }
 
-      return (
-        bookmarks: bookmarkRows,
-        folders: folderRows,
-        tags: tagRows,
-        tagIdsByBookmark: tagIdsByBookmark,
-      );
-    });
+  /// Same as [readLocalSnapshot] but without opening a new transaction.
+  /// Call from inside an existing `_db.transaction` block — Drift does
+  /// not support nested transactions.
+  Future<LocalSnapshot> readLocalSnapshotInTransaction() =>
+      _readLocalSnapshotInTxn();
 
+  Future<LocalSnapshot> _readLocalSnapshotInTxn() async {
+    final bookmarkRows = await (_db.select(_db.bookmarks)
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
+        .get();
+    final folderRows = await (_db.select(_db.folders)
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
+        .get();
+    final tagRows = await (_db.select(_db.tags)
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
+        .get();
+    final junctionRows = await (_db.select(_db.bookmarkTags)
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.tagId),
+          ]))
+        .get();
+
+    // Group junctions by bookmarkId for O(1) lookup during conversion.
+    final tagIdsByBookmark = <String, List<String>>{};
+    for (final j in junctionRows) {
+      tagIdsByBookmark
+          .putIfAbsent(j.bookmarkId, () => <String>[])
+          .add(j.tagId);
+    }
+
+    return LocalSnapshot(
+      bookmarks: bookmarkRows,
+      folders: folderRows,
+      tags: tagRows,
+      tagIdsByBookmark: tagIdsByBookmark,
+    );
+  }
+
+  DriveBookmarksFile _toEnvelope(LocalSnapshot snapshot, DateTime stamp) {
     return DriveBookmarksFile(
       version: 1,
-      lastModified: _clock().toIso8601String(),
-      bookmarks: result.bookmarks
+      lastModified: stamp.toIso8601String(),
+      bookmarks: snapshot.bookmarks
           .map(
             (row) => _toDriveBookmark(
               row,
-              result.tagIdsByBookmark[row.id] ?? const <String>[],
+              snapshot.tagIdsByBookmark[row.id] ?? const <String>[],
             ),
           )
           .toList(growable: false),
-      folders: result.folders.map(_toDriveFolder).toList(growable: false),
-      tags: result.tags.map(_toDriveTag).toList(growable: false),
+      folders: snapshot.folders.map(_toDriveFolder).toList(growable: false),
+      tags: snapshot.tags.map(_toDriveTag).toList(growable: false),
     );
   }
 

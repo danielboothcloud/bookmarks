@@ -55,11 +55,13 @@ extension SyncStatusPatterns on SyncStatus {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( SyncIdle value)?  idle,TResult Function( SyncPushing value)?  pushing,TResult Function( SyncSynced value)?  synced,TResult Function( SyncFailed value)?  failed,TResult Function( SyncAwaitingInitialPull value)?  awaitingInitialPull,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( SyncIdle value)?  idle,TResult Function( SyncPulling value)?  pulling,TResult Function( SyncMerging value)?  merging,TResult Function( SyncPushing value)?  pushing,TResult Function( SyncSynced value)?  synced,TResult Function( SyncFailed value)?  failed,TResult Function( SyncAwaitingInitialPull value)?  awaitingInitialPull,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case SyncIdle() when idle != null:
-return idle(_that);case SyncPushing() when pushing != null:
+return idle(_that);case SyncPulling() when pulling != null:
+return pulling(_that);case SyncMerging() when merging != null:
+return merging(_that);case SyncPushing() when pushing != null:
 return pushing(_that);case SyncSynced() when synced != null:
 return synced(_that);case SyncFailed() when failed != null:
 return failed(_that);case SyncAwaitingInitialPull() when awaitingInitialPull != null:
@@ -81,11 +83,13 @@ return awaitingInitialPull(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( SyncIdle value)  idle,required TResult Function( SyncPushing value)  pushing,required TResult Function( SyncSynced value)  synced,required TResult Function( SyncFailed value)  failed,required TResult Function( SyncAwaitingInitialPull value)  awaitingInitialPull,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( SyncIdle value)  idle,required TResult Function( SyncPulling value)  pulling,required TResult Function( SyncMerging value)  merging,required TResult Function( SyncPushing value)  pushing,required TResult Function( SyncSynced value)  synced,required TResult Function( SyncFailed value)  failed,required TResult Function( SyncAwaitingInitialPull value)  awaitingInitialPull,}){
 final _that = this;
 switch (_that) {
 case SyncIdle():
-return idle(_that);case SyncPushing():
+return idle(_that);case SyncPulling():
+return pulling(_that);case SyncMerging():
+return merging(_that);case SyncPushing():
 return pushing(_that);case SyncSynced():
 return synced(_that);case SyncFailed():
 return failed(_that);case SyncAwaitingInitialPull():
@@ -103,11 +107,13 @@ return awaitingInitialPull(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( SyncIdle value)?  idle,TResult? Function( SyncPushing value)?  pushing,TResult? Function( SyncSynced value)?  synced,TResult? Function( SyncFailed value)?  failed,TResult? Function( SyncAwaitingInitialPull value)?  awaitingInitialPull,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( SyncIdle value)?  idle,TResult? Function( SyncPulling value)?  pulling,TResult? Function( SyncMerging value)?  merging,TResult? Function( SyncPushing value)?  pushing,TResult? Function( SyncSynced value)?  synced,TResult? Function( SyncFailed value)?  failed,TResult? Function( SyncAwaitingInitialPull value)?  awaitingInitialPull,}){
 final _that = this;
 switch (_that) {
 case SyncIdle() when idle != null:
-return idle(_that);case SyncPushing() when pushing != null:
+return idle(_that);case SyncPulling() when pulling != null:
+return pulling(_that);case SyncMerging() when merging != null:
+return merging(_that);case SyncPushing() when pushing != null:
 return pushing(_that);case SyncSynced() when synced != null:
 return synced(_that);case SyncFailed() when failed != null:
 return failed(_that);case SyncAwaitingInitialPull() when awaitingInitialPull != null:
@@ -128,10 +134,12 @@ return awaitingInitialPull(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  idle,TResult Function()?  pushing,TResult Function( DateTime at)?  synced,TResult Function( AppError error)?  failed,TResult Function()?  awaitingInitialPull,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  idle,TResult Function()?  pulling,TResult Function()?  merging,TResult Function()?  pushing,TResult Function( DateTime at)?  synced,TResult Function( AppError error)?  failed,TResult Function()?  awaitingInitialPull,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case SyncIdle() when idle != null:
-return idle();case SyncPushing() when pushing != null:
+return idle();case SyncPulling() when pulling != null:
+return pulling();case SyncMerging() when merging != null:
+return merging();case SyncPushing() when pushing != null:
 return pushing();case SyncSynced() when synced != null:
 return synced(_that.at);case SyncFailed() when failed != null:
 return failed(_that.error);case SyncAwaitingInitialPull() when awaitingInitialPull != null:
@@ -153,10 +161,12 @@ return awaitingInitialPull();case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  idle,required TResult Function()  pushing,required TResult Function( DateTime at)  synced,required TResult Function( AppError error)  failed,required TResult Function()  awaitingInitialPull,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  idle,required TResult Function()  pulling,required TResult Function()  merging,required TResult Function()  pushing,required TResult Function( DateTime at)  synced,required TResult Function( AppError error)  failed,required TResult Function()  awaitingInitialPull,}) {final _that = this;
 switch (_that) {
 case SyncIdle():
-return idle();case SyncPushing():
+return idle();case SyncPulling():
+return pulling();case SyncMerging():
+return merging();case SyncPushing():
 return pushing();case SyncSynced():
 return synced(_that.at);case SyncFailed():
 return failed(_that.error);case SyncAwaitingInitialPull():
@@ -174,10 +184,12 @@ return awaitingInitialPull();}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  idle,TResult? Function()?  pushing,TResult? Function( DateTime at)?  synced,TResult? Function( AppError error)?  failed,TResult? Function()?  awaitingInitialPull,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  idle,TResult? Function()?  pulling,TResult? Function()?  merging,TResult? Function()?  pushing,TResult? Function( DateTime at)?  synced,TResult? Function( AppError error)?  failed,TResult? Function()?  awaitingInitialPull,}) {final _that = this;
 switch (_that) {
 case SyncIdle() when idle != null:
-return idle();case SyncPushing() when pushing != null:
+return idle();case SyncPulling() when pulling != null:
+return pulling();case SyncMerging() when merging != null:
+return merging();case SyncPushing() when pushing != null:
 return pushing();case SyncSynced() when synced != null:
 return synced(_that.at);case SyncFailed() when failed != null:
 return failed(_that.error);case SyncAwaitingInitialPull() when awaitingInitialPull != null:
@@ -213,6 +225,70 @@ int get hashCode => runtimeType.hashCode;
 @override
 String toString() {
   return 'SyncStatus.idle()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class SyncPulling implements SyncStatus {
+  const SyncPulling();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SyncPulling);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'SyncStatus.pulling()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class SyncMerging implements SyncStatus {
+  const SyncMerging();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SyncMerging);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'SyncStatus.merging()';
 }
 
 

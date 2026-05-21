@@ -9,11 +9,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingSyncService implements DriveSyncService {
-  final List<String> pushedFileIds = [];
+  final List<String> syncedFileIds = [];
 
   @override
-  Future<Result<void, AppError>> push({required String fileId}) async {
-    pushedFileIds.add(fileId);
+  Future<Result<void, AppError>> sync({required String fileId}) async {
+    syncedFileIds.add(fileId);
     return const Ok<void, AppError>(null);
   }
 
@@ -69,7 +69,7 @@ class _TestLifecycleHostState extends ConsumerState<_TestLifecycleHost>
     if (state != AppLifecycleState.resumed) return;
     final authState = ref.read(driveAuthStateProvider).value;
     if (authState is! DriveAuthConnected) return;
-    ref.read(driveSyncServiceProvider).push(fileId: authState.fileId);
+    ref.read(driveSyncServiceProvider).sync(fileId: authState.fileId);
   }
 
   @override
@@ -90,7 +90,7 @@ Future<void> _dispatchLifecycle(WidgetTester tester, AppLifecycleState state) as
 }
 
 void main() {
-  testWidgets('AppLifecycleState.resumed fires push when connected',
+  testWidgets('AppLifecycleState.resumed fires sync when connected',
       (tester) async {
     final service = _RecordingSyncService();
     await tester.pumpWidget(
@@ -110,10 +110,10 @@ void main() {
     await tester.pumpAndSettle();
 
     await _dispatchLifecycle(tester, AppLifecycleState.resumed);
-    expect(service.pushedFileIds, ['fid-1']);
+    expect(service.syncedFileIds, ['fid-1']);
   });
 
-  testWidgets('AppLifecycleState.paused does NOT fire push',
+  testWidgets('AppLifecycleState.paused does NOT fire sync',
       (tester) async {
     final service = _RecordingSyncService();
     await tester.pumpWidget(
@@ -132,10 +132,10 @@ void main() {
     );
 
     await _dispatchLifecycle(tester, AppLifecycleState.paused);
-    expect(service.pushedFileIds, isEmpty);
+    expect(service.syncedFileIds, isEmpty);
   });
 
-  testWidgets('resumed event when disconnected does NOT fire push',
+  testWidgets('resumed event when disconnected does NOT fire sync',
       (tester) async {
     final service = _RecordingSyncService();
     await tester.pumpWidget(
@@ -152,10 +152,10 @@ void main() {
     await tester.pumpAndSettle();
 
     await _dispatchLifecycle(tester, AppLifecycleState.resumed);
-    expect(service.pushedFileIds, isEmpty);
+    expect(service.syncedFileIds, isEmpty);
   });
 
-  testWidgets('multiple consecutive resumed events fire push each time',
+  testWidgets('multiple consecutive resumed events fire sync each time',
       (tester) async {
     final service = _RecordingSyncService();
     await tester.pumpWidget(
@@ -178,6 +178,6 @@ void main() {
     await _dispatchLifecycle(tester, AppLifecycleState.paused);
     await _dispatchLifecycle(tester, AppLifecycleState.resumed);
 
-    expect(service.pushedFileIds, ['fid-1', 'fid-1']);
+    expect(service.syncedFileIds, ['fid-1', 'fid-1']);
   });
 }

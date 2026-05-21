@@ -79,6 +79,28 @@ void main() {
     expect(find.text('Syncing…'), findsOneWidget);
   });
 
+  testWidgets('renders "Pulling from Drive…" for SyncStatus.pulling',
+      (tester) async {
+    await _pumpWith(
+      tester,
+      auth: connected,
+      status: const SyncStatus.pulling(),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Pulling from Drive…'), findsOneWidget);
+  });
+
+  testWidgets('renders "Merging changes…" for SyncStatus.merging',
+      (tester) async {
+    await _pumpWith(
+      tester,
+      auth: connected,
+      status: const SyncStatus.merging(),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Merging changes…'), findsOneWidget);
+  });
+
   testWidgets("renders \"Couldn't sync — will retry\" for SyncStatus.failed",
       (tester) async {
     await _pumpWith(

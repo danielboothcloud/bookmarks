@@ -11,6 +11,7 @@ import 'package:bookmarks/core/drive/drive_file_service.dart'
     show DriveRetryPolicy;
 import 'package:bookmarks/core/drive/drive_snapshot_builder.dart';
 import 'package:bookmarks/core/drive/drive_sync_service.dart';
+import 'package:bookmarks/core/drive/merge_applier.dart';
 import 'package:bookmarks/core/drive/models/drive_bookmarks_file.dart';
 import 'package:bookmarks/core/drive/sync_status.dart';
 import 'package:bookmarks/core/error/app_error.dart';
@@ -233,6 +234,7 @@ DriveSyncService _buildService({
     ),
     storage: storage,
     httpClient: client,
+    mergeApplier: MergeApplier(db),
     retryPolicy: retryPolicy,
     clock: clock ?? () => DateTime.utc(2026, 5, 20, 14, 23, 45, 123),
   );

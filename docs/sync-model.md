@@ -6,7 +6,7 @@ The contract for how this app pushes local changes to Google Drive. Update this 
 
 ## Why this exists
 
-The app is offline-first, single-user, no-backend, no-telemetry. The Drive sync subsystem (Epic 4) is the only network code in the app. Story 4.2 ships the push half; pull / merge / conflict resolution land in Story 4.3, the full status state-machine in Story 4.4, connectivity-driven reconnect in Story 4.5.
+The app is offline-first, single-user, no-backend, no-telemetry. The Drive sync subsystem (Epic 4) is the only network code in the app. Story 4.2 shipped the push half; Story 4.3 added the pull + merge half (per-record LWW conflict resolution). The full status state-machine lands in Story 4.4; connectivity-driven reconnect in Story 4.5.
 
 Sync is the second-highest-risk subsystem for NFR9 ("no telemetry, no analytics, no third-party error reporting") -- centralising the contract here makes review easy: anything that uploads bytes from the device must be expressible against the rules below.
 
@@ -123,6 +123,63 @@ Retry attempts emit `debugPrint` in debug builds only; no logging package is add
 
 ---
 
+## The pull half (Story 4.3)
+
+Story 4.3 makes the round-trip real. The orchestrator's three triggers (auth-state transition, lifecycle resume, queue-non-empty debounce) now dispatch a unified `sync()` call: pull-then-push, with short-circuit on pull failure. The push half above is unchanged; the pull half adds four pieces.
+
+### 1. Pull-then-push cycle
+
+`DriveSyncService.sync(fileId)` is `pull() ∘ push()`. Pull runs first so any remote changes from another device land locally before our own pending writes get uploaded; push only runs if pull returns `Ok`. The reasoning: a failed pull might leave us unaware of remote changes, so pushing our snapshot atop it risks overwriting another device's data. Pull failures emit `SyncStatus.failed`; the next trigger event retries.
+
+### 2. LWW merge algorithm
+
+`MergeEngine.merge(local, remote)` is a pure function: takes a `LocalSnapshot` and a `DriveBookmarksFile`, returns a `MergePlan` of upserts and deletes. The truth table (per record id, per entity type):
+
+| Local | Remote | Comparison | Decision |
+|---|---|---|---|
+| absent | present | — | upsert remote (FR23, FR36 first-launch) |
+| present | absent | local `updatedAt` < remote `lastModified` | delete local (the other device deleted it) |
+| present | absent | local `updatedAt` ≥ remote `lastModified` | keep local (our edit post-dates their snapshot) |
+| present | present | remote `updatedAt` > local | upsert remote (FR24 silent LWW) |
+| present | present | local `updatedAt` > remote | keep local |
+| present | present | equal | lexicographic `id` asc tiebreaker — vanishingly rare; defensive determinism |
+
+`bookmark_tags` has no per-link `updatedAt`. The merge is computed at parent-bookmark granularity: when the remote bookmark wins, replace the local junction set with the remote's `tagIds` array; when local wins, preserve local junctions.
+
+### 3. Trigger feedback cleanup (the load-bearing design decision)
+
+Merge writes fire 11 outbox triggers — one `sync_queue` row per merged record. The FTS triggers also fire, which is what we want (the FTS index must reflect the merged state). The `sync_queue` rows are NOT what we want: they would cause the auto-push orchestrator to observe a non-zero count and push the just-merged state straight back to Drive, burning quota in a ping-pong loop.
+
+The fix lives inside the merge transaction:
+
+1. `cursorId = COALESCE(MAX(id), 0) FROM sync_queue` BEFORE any merge write.
+2. Apply the merge plan.
+3. `DELETE FROM sync_queue WHERE id > cursorId` AFTER.
+
+Any user mutation that races the merge is serialized by SQLite's write lock: it commits after the merge transaction commits, with its trigger-inserted rows having ids above the deleted range. The user write's queue rows survive untouched.
+
+The alternative — modify the 11 trigger WHEN clauses to check a `temp.merge_active` flag — would require a schema migration and 11 trigger rewrites. The cursor approach was chosen because it's contained to `MergeApplier` and requires zero schema / trigger churn. Documented escalation path if a future selective-merge use case surfaces.
+
+### 4. Version rejection
+
+A remote envelope with `version != 1` is rejected with `Err(SyncError('Unsupported Drive file version: ...'))`. The gate is NOT opened. The local DB is NOT touched. The user sees the calm "Couldn't sync — will retry" indicator label and is expected to update to a newer client. The `version` field is the migration hook; the migration code does not yet exist.
+
+### 5. Gate opening on merge
+
+`drive.last_pulled_at = now()` is written AFTER the merge transaction commits, AFTER all writes are durable. A pull failure or version rejection leaves the flag in its prior state. Once the flag is non-null it stays non-null (until the user disconnects in 4.5); subsequent pulls refresh the timestamp idempotently.
+
+### 6. First-connect probe (demoted)
+
+The 4.2-era first-connect probe still exists in `_pushInternal` as a fast-path for the empty-remote case. The merge path is now the authoritative gate-opening route — `sync()` pulls first, the merge opens the gate, push observes the gate is already open and proceeds. The probe is only reachable via a direct `push()` call (tests; a future debug-only "Push now" button); it's retained because removing it would force a rework of 4.2's test fixtures for zero behavioral gain.
+
+### 7. Acknowledged limitation: tag-only edits
+
+The bookmark `updatedAt` is not advanced when a tag link changes (`TagRepository.linkBookmarkTag` / `unlinkBookmarkTag` write to `bookmark_tags` only). The merge engine compensates by treating the remote `tagIds` array as authoritative when the remote bookmark wins. But: if Device A edits a tag-link and Device B has a later bookmark title edit, Device B's bookmark wins LWW, and A's tag-only edit may not propagate.
+
+A repository-level fix (advance `bookmarks.updated_at` on tag link change) is the proper resolution; deferred until smoke testing surfaces the divergence in real two-device use.
+
+---
+
 ## Network destinations
 
 The sync subsystem contacts EXACTLY these endpoints. Anything else is a bug.
@@ -130,7 +187,8 @@ The sync subsystem contacts EXACTLY these endpoints. Anything else is a bug.
 | Endpoint | Purpose | Frequency |
 |---|---|---|
 | `https://oauth2.googleapis.com/token` | Refresh access token via `googleapis_auth.autoRefreshingClient` | On access-token expiry (~1×/hour for an active session) |
-| `https://www.googleapis.com/drive/v3/files/{fileId}` | `files.update` upload (push) and `files.get?alt=media` (first-connect probe only) | 1× per push window; first-connect probe is 1×/device-lifetime |
+| `https://www.googleapis.com/drive/v3/files/{fileId}` (`files.update`) | Whole-snapshot push | 1× per push window |
+| `https://www.googleapis.com/drive/v3/files/{fileId}?alt=media` (`files.get`) | Pull (Story 4.3); first-connect probe (Story 4.2 fast-path) | 1× per sync cycle; probe is 1×/device-lifetime |
 
 The authentication endpoints proper (consent + initial token exchange) are covered in `docs/auth-model.md`. They are NOT re-listed here -- the sync engine never invokes them; OAuth flow is Story 4.1's territory.
 
@@ -149,16 +207,21 @@ grep -ri "polling\|setInterval\|periodic" lib/core/drive/
 
 # All HTTP endpoints in the sync surface should be Drive or token endpoints.
 grep -rn "http\." lib/core/drive/ | grep -v "_test\.dart"
+
+# Pull / push touch only files.get and files.update on www.googleapis.com.
+grep -rn "files\.get\|files\.update" lib/core/drive/
 ```
 
-Expected output: zero matches for the first two; the third should only surface the Drive and OAuth token URLs from `oauth_config.dart` and the googleapis package.
+Expected output: zero matches for the first two; the third should only surface the Drive and OAuth token URLs from `oauth_config.dart` and the googleapis package; the fourth surfaces only `api.files.get` and `api.files.update` in `drive_sync_service.dart` (no other Drive endpoints).
 
 ---
 
 ## Cross-references
 
-- `lib/core/drive/drive_sync_service.dart` -- the engine.
-- `lib/core/drive/drive_snapshot_builder.dart` -- assembles the v1 envelope.
+- `lib/core/drive/drive_sync_service.dart` -- the engine (push + pull + unified `sync` cycle).
+- `lib/core/drive/merge_engine.dart` -- pure per-record LWW; produces a `MergePlan` (Story 4.3).
+- `lib/core/drive/merge_applier.dart` -- transactional applier with cursor-cleanup for trigger feedback (Story 4.3).
+- `lib/core/drive/drive_snapshot_builder.dart` -- assembles the v1 envelope; exposes `readLocalSnapshot()` for the merge applier.
 - `lib/core/drive/models/` -- the envelope types.
 - `lib/core/database/sync_triggers_schema.dart` -- the 11 outbox trigger DDL.
 - `lib/core/database/drift_files/sync_triggers.drift` -- the trigger documentation source-of-truth.

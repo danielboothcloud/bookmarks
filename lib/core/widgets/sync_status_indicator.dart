@@ -63,6 +63,8 @@ class SyncStatusIndicator extends ConsumerWidget {
   static String _labelFor(SyncStatus status) {
     return switch (status) {
       SyncIdle() => 'Synced with Drive',
+      SyncPulling() => 'Pulling from Drive…',
+      SyncMerging() => 'Merging changes…',
       SyncPushing() => 'Syncing…',
       SyncSynced() => 'Synced with Drive',
       SyncFailed() => "Couldn't sync — will retry",
