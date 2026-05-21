@@ -259,4 +259,124 @@ void main() {
     // Both calls share one in-flight future → exactly one cycle ran.
     expect(drive.getCount, 1);
   });
+
+  test('sync() arriving while push() is in flight runs its own pull after',
+      () async {
+    // Regression: a previous implementation collapsed any sync() onto
+    // an in-flight push() and silently skipped the pull leg — so
+    // lifecycle-resume after a queue-debounce push would never fetch
+    // remote changes. The fix: sync() awaits the in-flight push, then
+    // runs its own pull-then-push.
+    storage.store[kDriveLastPulledAtKey] =
+        DateTime.utc(2026, 5, 19).toIso8601String();
+    // Seed a queue row so push() has work and stays in flight long
+    // enough for sync() to land.
+    await db.customStatement(
+      'INSERT INTO bookmarks (id, url, title, created_at, updated_at) '
+      'VALUES (?, ?, ?, ?, ?)',
+      ['b1', 'https://example.com', 'T', 1000, 1000],
+    );
+    final drive = _CycleFakeDrive();
+    final service = _buildService(
+      db: db,
+      storage: storage,
+      client: drive.buildClient(),
+    );
+    addTearDown(service.dispose);
+
+    final pushFut = service.push(fileId: 'file-1');
+    final syncFut = service.sync(fileId: 'file-1');
+    final results = await Future.wait([pushFut, syncFut]);
+    expect(results.every((r) => r is Ok<void, AppError>), isTrue);
+    expect(drive.getCount, 1,
+        reason: 'sync() ran its own pull after push completed');
+  });
+
+  test('gate-open storage write failure surfaces as Err', () async {
+    final drive = _CycleFakeDrive();
+    final failingStorage = _FailingWriteStorage(failKey: kDriveLastPulledAtKey)
+      ..store[DriveStorageKeys.accessToken] = 'access-x'
+      ..store[DriveStorageKeys.refreshToken] = 'refresh-x'
+      ..store[DriveStorageKeys.expiresAt] = DateTime.now()
+          .toUtc()
+          .add(const Duration(hours: 1))
+          .toIso8601String();
+    final service = DriveSyncService(
+      queue: SyncQueueRepository(db),
+      snapshotBuilder: DriveSnapshotBuilder(db),
+      credentials: DriveCredentialsStore(
+        storage: failingStorage,
+        clientId: 'test-client-id',
+        clientSecret: 'test-client-secret',
+      ),
+      storage: failingStorage,
+      httpClient: drive.buildClient(),
+      mergeApplier: MergeApplier(db),
+      retryPolicy: _fastRetry,
+      clock: () => DateTime.utc(2026, 5, 20),
+    );
+    addTearDown(service.dispose);
+
+    final result = await service.pull(fileId: 'file-1');
+    expect(result, isA<Err<void, AppError>>(),
+        reason: 'gate-write failure must not be silently swallowed');
+    expect(failingStorage.store[kDriveLastPulledAtKey], isNull,
+        reason: 'gate stays closed; next pull retries');
+  });
+
+  test('sync() suppresses the intermediate synced emit between pull and push',
+      () async {
+    storage.store[kDriveLastPulledAtKey] =
+        DateTime.utc(2026, 5, 19).toIso8601String();
+    await db.customStatement(
+      'INSERT INTO bookmarks (id, url, title, created_at, updated_at) '
+      'VALUES (?, ?, ?, ?, ?)',
+      ['b1', 'https://example.com', 'T', 1000, 1000],
+    );
+    final drive = _CycleFakeDrive();
+    final service = _buildService(
+      db: db,
+      storage: storage,
+      client: drive.buildClient(),
+    );
+    addTearDown(service.dispose);
+
+    final statuses = <String>[];
+    final sub = service.watchStatus().listen((s) {
+      statuses.add(s.runtimeType.toString());
+    });
+
+    final result = await service.sync(fileId: 'file-1');
+    expect(result, isA<Ok<void, AppError>>());
+    await sub.cancel();
+
+    // Sequence should NOT contain a SyncSynced between SyncMerging and
+    // SyncPushing — that intermediate "synced" flash was the bug.
+    final mergeIdx = statuses.indexOf('SyncMerging');
+    final pushIdx = statuses.indexOf('SyncPushing');
+    expect(mergeIdx, isNonNegative);
+    expect(pushIdx, greaterThan(mergeIdx));
+    final between = statuses.sublist(mergeIdx + 1, pushIdx);
+    expect(between.contains('SyncSynced'), isFalse,
+        reason: 'no intermediate synced flash; full sequence: $statuses');
+  });
+}
+
+class _FailingWriteStorage extends _InMemorySecureStorage {
+  _FailingWriteStorage({required this.failKey});
+  final String failKey;
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    dynamic iOptions,
+    dynamic aOptions,
+    dynamic lOptions,
+    dynamic webOptions,
+    dynamic mOptions,
+    dynamic wOptions,
+  }) async {
+    if (key == failKey) throw StateError('simulated secure-storage failure');
+    return super.write(key: key, value: value);
+  }
 }

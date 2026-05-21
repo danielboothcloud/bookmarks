@@ -57,24 +57,109 @@ import 'models/drive_tag.dart';
 ///    → final orphan-tag sweep. SQLite has no FK enforcement on
 ///    `bookmark_tags`; the application enforces integrity here.
 class MergeApplier {
-  MergeApplier(this._db);
+  MergeApplier(
+    this._db, {
+    DateTime Function() clock = _defaultClock,
+  }) : _clock = clock;
+
+  static DateTime _defaultClock() => DateTime.now().toUtc();
 
   final AppDatabase _db;
+  final DateTime Function() _clock;
 
   /// Computes the merge plan for [remote] against the current local
   /// state and writes it inside a single Drift transaction.
+  ///
+  /// [hasEverSynced] controls the first-sync-safety rule: when false,
+  /// the engine refuses to delete local records that are missing from
+  /// the remote envelope (we can't know whether they were never
+  /// pushed vs. deleted upstream). Pass `true` once `drive.last_pulled_at`
+  /// has ever been set; pass `false` on the very first merge.
   ///
   /// Returns:
   ///  * `Ok(null)` on successful commit (including the empty-plan
   ///    no-op case).
   ///  * `Err(StorageError(...))` on transaction-level failure (any
   ///    exception during the transaction body rolls back ALL writes).
-  Future<Result<void, AppError>> apply(DriveBookmarksFile remote) async {
+  Future<Result<void, AppError>> apply(
+    DriveBookmarksFile remote, {
+    bool hasEverSynced = true,
+  }) async {
     try {
       await _db.transaction(() async {
-        final local = await _readLocalSnapshotInTxn();
-        final plan = MergeEngine.merge(local: local, remote: remote);
+        final local = await readLocalSnapshotInTransaction(_db);
+        final plan = MergeEngine.merge(
+          local: local,
+          remote: remote,
+          hasEverSynced: hasEverSynced,
+        );
         final cursorId = await _readMaxQueueId();
+
+        // Tags whose junctions are touched by this merge — narrow the
+        // post-merge orphan sweep to just these IDs so pre-existing
+        // local orphan tags (if any) are not collateral damage.
+        final touchedTagIds = <String>{
+          ...plan.tagsToDelete,
+          ...plan.bookmarkTagLinksToReplace.values.expand((ids) => ids),
+        };
+        // Tags that lose junctions via cascade-deleted bookmarks need
+        // sweeping too — read the affected tag IDs BEFORE the bookmark
+        // delete cascades wipe the junction rows.
+        if (plan.bookmarksToDelete.isNotEmpty) {
+          final rows = await _db
+              .customSelect(
+                'SELECT DISTINCT tag_id FROM bookmark_tags '
+                'WHERE bookmark_id IN ('
+                '${List.filled(plan.bookmarksToDelete.length, '?').join(',')})',
+                variables: [
+                  for (final id in plan.bookmarksToDelete)
+                    Variable<String>(id),
+                ],
+                readsFrom: {_db.bookmarkTags},
+              )
+              .get();
+          for (final r in rows) {
+            touchedTagIds.add(r.read<String>('tag_id'));
+          }
+        }
+        if (plan.foldersToDelete.isNotEmpty) {
+          final rows = await _db
+              .customSelect(
+                'SELECT DISTINCT bt.tag_id FROM bookmark_tags bt '
+                'INNER JOIN bookmarks b ON b.id = bt.bookmark_id '
+                'WHERE b.folder_id IN ('
+                '${List.filled(plan.foldersToDelete.length, '?').join(',')})',
+                variables: [
+                  for (final id in plan.foldersToDelete)
+                    Variable<String>(id),
+                ],
+                readsFrom: {_db.bookmarkTags, _db.bookmarks},
+              )
+              .get();
+          for (final r in rows) {
+            touchedTagIds.add(r.read<String>('tag_id'));
+          }
+        }
+        // Bookmarks marked for upsert have their junction sets replaced;
+        // collect the OLD junction tag IDs so we can sweep any whose
+        // last reference is removed by the replacement.
+        if (plan.bookmarkTagLinksToReplace.isNotEmpty) {
+          final replacedBookmarkIds = plan.bookmarkTagLinksToReplace.keys;
+          final rows = await _db
+              .customSelect(
+                'SELECT DISTINCT tag_id FROM bookmark_tags '
+                'WHERE bookmark_id IN ('
+                '${List.filled(replacedBookmarkIds.length, '?').join(',')})',
+                variables: [
+                  for (final id in replacedBookmarkIds) Variable<String>(id),
+                ],
+                readsFrom: {_db.bookmarkTags},
+              )
+              .get();
+          for (final r in rows) {
+            touchedTagIds.add(r.read<String>('tag_id'));
+          }
+        }
 
         await _applyFolderUpserts(plan.foldersToUpsert);
         await _applyBookmarkUpserts(plan.bookmarksToUpsert);
@@ -83,7 +168,7 @@ class MergeApplier {
         await _applyBookmarkDeletes(plan.bookmarksToDelete);
         await _applyFolderDeletes(plan.foldersToDelete);
         await _applyTagDeletes(plan.tagsToDelete);
-        await _sweepOrphanTags();
+        await _sweepOrphanTags(touchedTagIds);
 
         // Cursor cleanup — drops any sync_queue rows the merge writes
         // above caused via the 4.2 outbox triggers. Rows whose id is
@@ -111,47 +196,6 @@ class MergeApplier {
         )
         .getSingle();
     return row.read<int>('m');
-  }
-
-  // Inline duplicate of DriveSnapshotBuilder's read pass. Read here
-  // (rather than reusing the builder) so the snapshot is captured
-  // inside the merge transaction with no extra ceremony.
-  Future<LocalSnapshot> _readLocalSnapshotInTxn() async {
-    final bookmarkRows = await (_db.select(_db.bookmarks)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.createdAt),
-            (t) => OrderingTerm.asc(t.id),
-          ]))
-        .get();
-    final folderRows = await (_db.select(_db.folders)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.createdAt),
-            (t) => OrderingTerm.asc(t.id),
-          ]))
-        .get();
-    final tagRows = await (_db.select(_db.tags)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.createdAt),
-            (t) => OrderingTerm.asc(t.id),
-          ]))
-        .get();
-    final junctionRows = await (_db.select(_db.bookmarkTags)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.tagId),
-          ]))
-        .get();
-    final tagIdsByBookmark = <String, List<String>>{};
-    for (final j in junctionRows) {
-      tagIdsByBookmark
-          .putIfAbsent(j.bookmarkId, () => <String>[])
-          .add(j.tagId);
-    }
-    return LocalSnapshot(
-      bookmarks: bookmarkRows,
-      folders: folderRows,
-      tags: tagRows,
-      tagIdsByBookmark: tagIdsByBookmark,
-    );
   }
 
   Future<void> _applyFolderUpserts(List<DriveFolder> folders) async {
@@ -215,7 +259,7 @@ class MergeApplier {
               BookmarkTagsCompanion(
                 bookmarkId: Value(bookmarkId),
                 tagId: Value(tagId),
-                createdAt: Value(DateTime.now().millisecondsSinceEpoch),
+                createdAt: Value(_clock().millisecondsSinceEpoch),
               ),
               mode: InsertMode.insertOrIgnore,
             );
@@ -264,19 +308,18 @@ class MergeApplier {
     }
   }
 
-  /// Final pass: hard-delete tags whose last junction was removed
-  /// during this merge. Mirrors the FR16 sweep at the tail of
-  /// `BookmarkRepository.delete` and `FolderRepository.deleteCascade`.
-  ///
-  /// Scoped to tags absent from the remote upsert list? No — the
-  /// merge upserts may have added new tags whose junctions are about
-  /// to be created by the junction replacement pass. Run AFTER the
-  /// junction replacements so newly-arrived tags (with junctions)
-  /// survive while genuinely orphaned tags are dropped.
-  Future<void> _sweepOrphanTags() async {
+  /// Hard-delete tags whose last junction was removed during this
+  /// merge. Mirrors the FR16 sweep at the tail of
+  /// `BookmarkRepository.delete` / `FolderRepository.deleteCascade`,
+  /// but scoped to [touchedTagIds] so pre-existing local orphan tags
+  /// outside the merge's footprint are NOT collateral damage.
+  Future<void> _sweepOrphanTags(Set<String> touchedTagIds) async {
+    if (touchedTagIds.isEmpty) return;
     await _db.customUpdate(
       'DELETE FROM tags '
-      'WHERE id NOT IN (SELECT DISTINCT tag_id FROM bookmark_tags)',
+      'WHERE id IN (${List.filled(touchedTagIds.length, '?').join(',')}) '
+      'AND id NOT IN (SELECT DISTINCT tag_id FROM bookmark_tags)',
+      variables: [for (final id in touchedTagIds) Variable<String>(id)],
       updates: {_db.tags},
     );
   }

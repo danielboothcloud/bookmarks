@@ -52,9 +52,19 @@ class MergeEngine {
   ///
   /// Callers are responsible for envelope-version validation BEFORE
   /// invoking this engine; the engine assumes a valid v1 envelope.
+  ///
+  /// [hasEverSynced] gates the "delete local because remote omits it"
+  /// branch. On the very first merge of a fresh install — when the
+  /// gate has never been opened — we have no way to distinguish "the
+  /// other device deleted this record" from "the user added this
+  /// record offline before ever connecting to Drive". When false, the
+  /// engine refuses to delete by absence; the missing-from-remote
+  /// records remain in the local DB and propagate up to Drive via the
+  /// chained push.
   static MergePlan merge({
     required LocalSnapshot local,
     required DriveBookmarksFile remote,
+    bool hasEverSynced = true,
   }) {
     final remoteLastModified =
         DateTime.parse(remote.lastModified).toUtc().millisecondsSinceEpoch;
@@ -101,6 +111,7 @@ class MergeEngine {
             : _parseIsoMs(remoteRec.updatedAt),
         remoteLastModified: remoteLastModified,
         id: id,
+        hasEverSynced: hasEverSynced,
       );
       switch (decision) {
         case _Decision.upsertRemote:
@@ -133,6 +144,7 @@ class MergeEngine {
             : _parseIsoMs(remoteRec.updatedAt),
         remoteLastModified: remoteLastModified,
         id: id,
+        hasEverSynced: hasEverSynced,
       );
       switch (decision) {
         case _Decision.upsertRemote:
@@ -163,6 +175,7 @@ class MergeEngine {
             : _parseIsoMs(remoteRec.updatedAt),
         remoteLastModified: remoteLastModified,
         id: id,
+        hasEverSynced: hasEverSynced,
       );
       switch (decision) {
         case _Decision.upsertRemote:
@@ -191,15 +204,23 @@ class MergeEngine {
     required int? remoteUpdatedAt,
     required int remoteLastModified,
     required String id,
+    required bool hasEverSynced,
   }) {
     if (localUpdatedAt == null && remoteUpdatedAt != null) {
       return _Decision.upsertRemote;
     }
+    if (localUpdatedAt == null && remoteUpdatedAt == null) {
+      // Defensively unreachable — ids come from local ∪ remote, so at
+      // least one side has the record. Keep local as the safe default.
+      return _Decision.keepLocal;
+    }
     if (remoteUpdatedAt == null && localUpdatedAt != null) {
-      // The other device's snapshot (remoteLastModified) post-dates our
-      // local write IFF localUpdatedAt < remoteLastModified — meaning
-      // they had a chance to see our write before they pushed, AND chose
-      // not to include it. Interpret as deletion.
+      // Missing-from-remote branch. The "other device deleted it"
+      // interpretation only holds when we've previously synced — only
+      // then could the other device have seen our local write before
+      // omitting it. On a never-yet-synced device the record may simply
+      // be offline-created and never pushed; keep it.
+      if (!hasEverSynced) return _Decision.keepLocal;
       if (localUpdatedAt < remoteLastModified) {
         return _Decision.deleteLocal;
       }
@@ -208,11 +229,8 @@ class MergeEngine {
     // Both present.
     if (remoteUpdatedAt! > localUpdatedAt!) return _Decision.upsertRemote;
     if (localUpdatedAt > remoteUpdatedAt) return _Decision.keepLocal;
-    // Tie on updatedAt; the engine has no second timestamp to fall back
-    // on. Use lexicographic id-ascending as the tiebreaker. In practice
-    // both sides have the same id (same record), so the comparison is
-    // against itself and we pick remote. Documented as defensive
-    // determinism, not a load-bearing path.
+    // Tie on updatedAt — same id on both sides, so lexicographic
+    // tiebreak is a wash. Pick remote as the deterministic default.
     return _Decision.upsertRemote;
   }
 

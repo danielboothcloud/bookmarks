@@ -95,6 +95,7 @@ class DriveSyncService {
   SyncStatus _lastEmitted = const SyncStatus.idle();
   DateTime? _lastSyncedAt;
   Future<Result<void, AppError>>? _inFlight;
+  _InFlightKind? _inFlightKind;
   bool _disposed = false;
 
   /// Status stream that prepends [currentStatus] for late subscribers.
@@ -125,7 +126,7 @@ class DriveSyncService {
   /// and uploading it to `bookmarks.json` in `appDataFolder`. Idempotent
   /// when there's nothing to push.
   Future<Result<void, AppError>> push({required String fileId}) {
-    return _coalesce(() => _pushInternal(fileId));
+    return _coalesce(_InFlightKind.push, () => _pushInternal(fileId));
   }
 
   /// Downloads the remote `bookmarks.json`, parses the v1 envelope,
@@ -147,7 +148,7 @@ class DriveSyncService {
   ///  * `Err(StorageError(...))` if the merge transaction rolls
   ///    back.
   Future<Result<void, AppError>> pull({required String fileId}) {
-    return _coalesce(() => _pullInternal(fileId));
+    return _coalesce(_InFlightKind.pull, () => _pullInternal(fileId));
   }
 
   /// Unified pull-then-push cycle. Pulls first (so a merge runs and
@@ -157,35 +158,54 @@ class DriveSyncService {
   /// a remote we couldn't read risks overwriting another device's
   /// data.
   Future<Result<void, AppError>> sync({required String fileId}) {
-    return _coalesce(() => _syncInternal(fileId));
+    return _coalesce(_InFlightKind.sync, () => _syncInternal(fileId));
   }
 
-  // Coalesces concurrent public-method calls onto a single in-flight
-  // future. Any caller that arrives while a cycle is running awaits
-  // the running cycle's Result. Internal helpers (`_pullInternal`,
-  // `_pushInternal`, `_syncInternal`) bypass this lock — `_sync`
-  // calls `_pull` and `_push` directly without re-grabbing.
+  // Coalesces concurrent public-method calls.
+  //
+  // Coalescing rules:
+  //   - sync-onto-sync, pull-onto-pull, push-onto-push: second caller
+  //     joins the in-flight future.
+  //   - pull-onto-sync, push-onto-sync: a sync is the broader cycle;
+  //     the narrower caller joins.
+  //   - sync-onto-pull or sync-onto-push: the in-flight narrower cycle
+  //     does NOT cover the sync's missing leg. Wait for the in-flight
+  //     to finish, then run a fresh sync.
   Future<Result<void, AppError>> _coalesce(
+    _InFlightKind kind,
     Future<Result<void, AppError>> Function() body,
-  ) {
-    final existing = _inFlight;
-    if (existing != null) return existing;
+  ) async {
+    while (_inFlight != null) {
+      final running = _inFlightKind;
+      if (running == _InFlightKind.sync || running == kind) {
+        return await _inFlight!;
+      }
+      // Different narrower cycle is running; wait it out and re-check.
+      await _inFlight;
+    }
     final future = body();
     _inFlight = future;
-    return future.whenComplete(() {
+    _inFlightKind = kind;
+    try {
+      return await future;
+    } finally {
       _inFlight = null;
-    });
+      _inFlightKind = null;
+    }
   }
 
   Future<Result<void, AppError>> _syncInternal(String fileId) async {
-    final pullResult = await _pullInternal(fileId);
+    final pullResult = await _pullInternal(fileId, emitSyncedOnSuccess: false);
     if (pullResult is Err<void, AppError>) {
       return pullResult;
     }
     return _pushInternal(fileId);
   }
 
-  Future<Result<void, AppError>> _pullInternal(String fileId) async {
+  Future<Result<void, AppError>> _pullInternal(
+    String fileId, {
+    bool emitSyncedOnSuccess = true,
+  }) async {
     try {
       _emit(const SyncStatus.pulling());
 
@@ -222,32 +242,51 @@ class DriveSyncService {
         return Err<void, AppError>(err);
       }
 
+      // Capture the gate state BEFORE the merge so the engine knows
+      // whether to treat "missing from remote" as a deletion. Without
+      // this, an offline-created local record on a fresh device would
+      // be wiped on first sync (we can't distinguish "the other
+      // device deleted it" from "we never pushed it").
+      final hasEverSynced =
+          (await _storage.read(key: kDriveLastPulledAtKey)) != null;
+
       _emit(const SyncStatus.merging());
 
-      final mergeResult = await _mergeApplier.apply(remote);
+      final mergeResult = await _mergeApplier.apply(
+        remote,
+        hasEverSynced: hasEverSynced,
+      );
       if (mergeResult is Err<void, AppError>) {
         _emit(SyncStatus.failed(mergeResult.error));
         return mergeResult;
       }
 
       // Gate-opening write happens AFTER the merge commits. A storage
-      // write failure here logs but does not roll back the merge; the
-      // next pull will rewrite the timestamp idempotently.
+      // write failure leaves the local DB with merged data but
+      // `last_pulled_at` still null — surface as Err so the caller
+      // (and UI) doesn't believe the cycle succeeded; the next pull
+      // will retry the timestamp write idempotently.
       try {
         await _storage.write(
           key: kDriveLastPulledAtKey,
           value: _clock().toIso8601String(),
         );
-      } catch (e) {
+      } catch (e, stack) {
         if (kDebugMode) {
           debugPrint(
-            'DriveSyncService.pull: gate-open storage write failed: $e',
+            'DriveSyncService.pull: gate-open storage write failed: '
+            '$e\n$stack',
           );
         }
+        final err = StorageError('Failed to open sync gate: $e');
+        _emit(SyncStatus.failed(err));
+        return Err<void, AppError>(err);
       }
 
       _lastSyncedAt = _clock();
-      _emit(SyncStatus.synced(at: _lastSyncedAt!));
+      if (emitSyncedOnSuccess) {
+        _emit(SyncStatus.synced(at: _lastSyncedAt!));
+      }
       return const Ok<void, AppError>(null);
     } catch (error, stack) {
       final mapped = _mapError(error);
@@ -407,3 +446,8 @@ class DriveSyncService {
     await _statusController.close();
   }
 }
+
+/// Marks which kind of cycle currently owns the `_inFlight` slot.
+/// Used by [DriveSyncService._coalesce] to decide whether a newly
+/// arriving call should join the running cycle or wait it out.
+enum _InFlightKind { pull, push, sync }

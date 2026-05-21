@@ -1,5 +1,3 @@
-import 'package:drift/drift.dart' show OrderingTerm;
-
 import '../database/app_database.dart';
 import 'local_snapshot.dart';
 import 'models/drive_bookmark.dart';
@@ -49,61 +47,11 @@ class DriveSnapshotBuilder {
   /// Reads the four tables inside a single transaction and returns a
   /// [LocalSnapshot] — the same shape the merge engine consumes.
   ///
-  /// Used by:
-  ///  * [build] (push path) — converts to [DriveBookmarksFile].
-  ///  * `MergeApplier` (pull path) — consumed directly by the merge
-  ///    engine; the applier reads INSIDE its own transaction so the
-  ///    snapshot is point-in-time-consistent with the writes that
-  ///    follow.
-  Future<LocalSnapshot> readLocalSnapshot() async {
-    return _db.transaction(_readLocalSnapshotInTxn);
-  }
-
-  /// Same as [readLocalSnapshot] but without opening a new transaction.
-  /// Call from inside an existing `_db.transaction` block — Drift does
-  /// not support nested transactions.
-  Future<LocalSnapshot> readLocalSnapshotInTransaction() =>
-      _readLocalSnapshotInTxn();
-
-  Future<LocalSnapshot> _readLocalSnapshotInTxn() async {
-    final bookmarkRows = await (_db.select(_db.bookmarks)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.createdAt),
-            (t) => OrderingTerm.asc(t.id),
-          ]))
-        .get();
-    final folderRows = await (_db.select(_db.folders)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.createdAt),
-            (t) => OrderingTerm.asc(t.id),
-          ]))
-        .get();
-    final tagRows = await (_db.select(_db.tags)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.createdAt),
-            (t) => OrderingTerm.asc(t.id),
-          ]))
-        .get();
-    final junctionRows = await (_db.select(_db.bookmarkTags)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.tagId),
-          ]))
-        .get();
-
-    // Group junctions by bookmarkId for O(1) lookup during conversion.
-    final tagIdsByBookmark = <String, List<String>>{};
-    for (final j in junctionRows) {
-      tagIdsByBookmark
-          .putIfAbsent(j.bookmarkId, () => <String>[])
-          .add(j.tagId);
-    }
-
-    return LocalSnapshot(
-      bookmarks: bookmarkRows,
-      folders: folderRows,
-      tags: tagRows,
-      tagIdsByBookmark: tagIdsByBookmark,
-    );
+  /// Push path entry point; opens its own transaction. The merge
+  /// applier calls `readLocalSnapshotInTransaction` from `local_snapshot.dart`
+  /// directly while inside its own `_db.transaction(...)` block.
+  Future<LocalSnapshot> readLocalSnapshot() {
+    return _db.transaction(() => readLocalSnapshotInTransaction(_db));
   }
 
   DriveBookmarksFile _toEnvelope(LocalSnapshot snapshot, DateTime stamp) {

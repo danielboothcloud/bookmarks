@@ -389,4 +389,45 @@ void main() {
     expect(plan.tagsToDelete, isEmpty);
     expect(plan.bookmarkTagLinksToReplace, isEmpty);
   });
+
+  group('first-sync safety (hasEverSynced = false)', () {
+    // Scenario: user adds bookmarks offline on a fresh install BEFORE
+    // ever connecting to Drive. On first connect, remote was pushed by
+    // another device at a moment that post-dates the local edits. The
+    // naive LWW algorithm would interpret "missing from remote, local
+    // older than remote.lastModified" as deletion and wipe the local
+    // records. The hasEverSynced=false guard preserves them.
+    test('offline-created local records survive when remote omits them', () {
+      final plan = MergeEngine.merge(
+        local: _localOf(
+          bookmarks: [_bRow('b-offline', updatedAt: 1000)],
+          folders: [_fRow('f-offline', updatedAt: 1000)],
+          tags: [_tRow('t-offline', updatedAt: 1000)],
+        ),
+        remote: _remoteOf(
+          lastModifiedMs: 5000,
+          bookmarks: [_dB('b-remote', updatedAtMs: 4000)],
+        ),
+        hasEverSynced: false,
+      );
+      expect(plan.bookmarksToDelete, isEmpty,
+          reason: 'first sync must not delete by absence');
+      expect(plan.foldersToDelete, isEmpty);
+      expect(plan.tagsToDelete, isEmpty);
+      // Remote upserts still flow through normally.
+      expect(plan.bookmarksToUpsert.map((b) => b.id), ['b-remote']);
+    });
+
+    test('subsequent sync (hasEverSynced=true) deletes by absence again', () {
+      // Same local/remote shapes — only the flag changes.
+      final plan = MergeEngine.merge(
+        local: _localOf(
+          bookmarks: [_bRow('b-offline', updatedAt: 1000)],
+        ),
+        remote: _remoteOf(lastModifiedMs: 5000),
+        hasEverSynced: true,
+      );
+      expect(plan.bookmarksToDelete, ['b-offline']);
+    });
+  });
 }
