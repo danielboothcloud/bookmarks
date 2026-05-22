@@ -304,11 +304,26 @@ void main() {
         reason: 'NetworkError / ClientException → grey');
     expect(greyState.dot, AppColors.syncUnavailable);
 
+    // Queue grows while engine is in SyncFailed: insert another bookmark
+    // and assert the indicator stays grey (precedence: SyncFailed > queue
+    // count). This exercises the AC2 precedence claim end-to-end.
+    await repo.save(_bm('b2'));
+    await Future<void>.delayed(Duration.zero);
+    final pendingWhileGrey =
+        container.read(syncQueuePendingCountProvider).value ?? 0;
+    expect(pendingWhileGrey, greaterThanOrEqualTo(2),
+        reason: 'second offline write enqueued on top of the first');
+    final stillGrey = _readIndicatorState(container);
+    expect(stillGrey.dot, AppColors.syncUnavailable,
+        reason: 'SyncFailed precedence holds even with pending > 0');
+    expect(stillGrey.label, anyOf('Drive unavailable',
+        "Couldn't sync — will retry"));
+
     // Drive recovers; force another trigger by re-saving (queue write
     // re-arms the debounce). The next cycle uploads and we transition
     // back to green.
     drive.setOnline(true);
-    await repo.save(_bm('b2'));
+    await repo.save(_bm('b3'));
     await _waitForStatus(container, (s) => s is SyncSynced);
 
     final greenState = _readIndicatorState(container);
@@ -444,6 +459,11 @@ void main() {
 
     await folders.save(_folder('f1', 'Folder one'));
 
+    // Move b1 → folder f1 (re-save with folderId set). Exercises the
+    // "move bookmark to folder" CRUD path called out in Task 5 / Test E.
+    final movedB1 = editedB1.copyWith(folderId: 'f1');
+    await bookmarks.save(movedB1);
+
     final tagResult = await tags.upsertByName('reading');
     final tag = switch (tagResult) {
       Ok(:final value) => value,
@@ -459,10 +479,55 @@ void main() {
     // raw rows so we can assert all CRUD ops are represented.
     final queueRows =
         await container.read(syncQueueRepositoryProvider).drain();
-    expect(queueRows.length, greaterThanOrEqualTo(6),
+    expect(queueRows.length, greaterThanOrEqualTo(7),
         reason: 'all CRUD ops enqueued: 2 inserts, 1 update, 1 delete, '
-            '1 folder save, 1 tag upsert, 1 tag link → ≥ 6 rows');
+            '1 folder save, 1 move-to-folder, 1 tag upsert, 1 tag link '
+            '→ ≥ 7 rows');
     expect(drive.uploads, isEmpty,
         reason: 'no network calls succeed while offline');
+  });
+
+  test('F: auth error (no credentials) surfaces grey "Drive unavailable"',
+      () async {
+    // Credentials cleared from storage — `authenticatedClient` returns
+    // null, the engine emits `SyncFailed(AuthError)`, and the indicator
+    // must read grey "Drive unavailable" (AC2 maps AuthError to the
+    // same label as NetworkError; Story 4.5 will own the re-auth flow).
+    storage.store[kDriveLastPulledAtKey] =
+        DateTime.utc(2026, 5, 19).toIso8601String();
+    storage.store.remove(DriveStorageKeys.accessToken);
+    storage.store.remove(DriveStorageKeys.refreshToken);
+    storage.store.remove(DriveStorageKeys.expiresAt);
+
+    final container = _buildContainer(
+      db: db,
+      storage: storage,
+      drive: drive,
+      auth: const DriveAuthState.connected(
+        email: 'x@y.com',
+        fileId: 'file-1',
+      ),
+    );
+    addTearDown(container.dispose);
+
+    container.listen(syncQueuePendingCountProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, __) {}, fireImmediately: true);
+
+    // Direct sync call: no credentials → AuthError on the first
+    // `authenticatedClient` read inside `pull`/`push`. We do not need
+    // the orchestrator here — the AuthError emission is synchronous on
+    // the first auth check, so a direct `sync()` is the most precise
+    // way to assert the mapping.
+    unawaited(container
+        .read(driveSyncServiceProvider)
+        .sync(fileId: 'file-1'));
+
+    await _waitForStatus(container, (s) => s is SyncFailed);
+
+    final state = _readIndicatorState(container);
+    expect(state.label, 'Drive unavailable',
+        reason: 'AuthError → "Drive unavailable" (AC2)');
+    expect(state.dot, AppColors.syncUnavailable);
   });
 }
