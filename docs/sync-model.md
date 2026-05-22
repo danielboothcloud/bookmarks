@@ -180,6 +180,54 @@ A repository-level fix (advance `bookmarks.updated_at` on tag link change) is th
 
 ---
 
+## The status surface (Story 4.4)
+
+4.2 + 4.3 built the engine. 4.4 owns what the user sees of it: the sidebar-footer indicator (`lib/core/widgets/sync_status_indicator.dart`). The widget is a pure projection of three reactive inputs onto a `(dot colour, label, pulsing?)` triple; no state of its own.
+
+### Composite state
+
+The truth table is the contract:
+
+| status                                 | pendingCount | hasEverSynced | dot                       | label                              |
+|---------------------------------------|--------------|----------------|---------------------------|-------------------------------------|
+| `SyncPulling`                         | n/a          | n/a            | amber pulse               | `Pulling from Drive…`              |
+| `SyncMerging`                         | n/a          | n/a            | amber pulse               | `Merging changes…`                 |
+| `SyncPushing`                         | n/a          | n/a            | amber pulse               | `Syncing…`                         |
+| `SyncFailed(NetworkError \| AuthError)` | n/a          | n/a            | grey                      | `Drive unavailable`                |
+| `SyncFailed(other)`                   | n/a          | n/a            | grey                      | `Couldn't sync — will retry`       |
+| `SyncAwaitingInitialPull`             | n/a          | n/a            | amber                     | `Awaiting initial sync from Drive` |
+| `SyncIdle` / `SyncSynced`             | `> 0`        | n/a            | amber                     | `Unsynced changes`                 |
+| `SyncIdle` / `SyncSynced`             | `0`          | `true`         | green                     | `Synced with Drive`                |
+| `SyncIdle` / `SyncSynced`             | `0`          | `false`        | amber                     | `Awaiting initial sync from Drive` |
+
+Precedence: in-progress beats queue-count; `SyncFailed` beats both. The widget's `switch` expression encodes this by branching on `status` first; queue-count is a secondary discriminator only for idle/synced. The dot palette tokens live in `lib/core/theme/app_colors.dart` (`syncSynced #6A9E6A`, `syncUnsynced #C8873A`, `syncUnavailable #9A9A9A`); they were added in 4.2 in anticipation of this story.
+
+Coverage: FR25 (status visibility), FR26 (in-progress signal), FR27 (offline / unsynced surface), NFR12 (sync failures never silent — every grey state carries a label that the `Semantics(liveRegion: true)` wrap announces).
+
+### `hasEverSyncedProvider` derivation
+
+A `StreamProvider<bool>` derived from `driveSyncServiceProvider.watchStatus()`. Yields `false` first; flips to `true` on the first `SyncSynced` emit of the session and `return`s — a subsequent `SyncFailed` does NOT reset the flag (the gate has been opened).
+
+We do NOT read `kDriveLastPulledAtKey` from secure storage on every rebuild. Trade-off: on a cold start where the gate was opened in a prior session, the engine emits `SyncIdle` first and the indicator briefly reads amber "Awaiting initial sync from Drive" until the cold-start `sync()` cycle lands its first `SyncSynced` (~250 ms). Accepted vs. the heavier alternative (per-rebuild storage read).
+
+### In-progress visual
+
+Vanilla Flutter: `AnimationController(duration: 1200ms)..repeat(reverse: true)`; opacity tweens 1.0 ↔ 0.4 inside a `FadeTransition`. No `flutter_animate`, no `lottie`, no motion framework dep. Wrapped in `RepaintBoundary` so the per-frame repaint stays within the 7×7 px bounds.
+
+Reduce-motion: gated on `MediaQuery.disableAnimations`. When true, the dot renders static (no `FadeTransition`); the controller is still created so a runtime flip of the accessibility flag doesn't require disposing/recreating it.
+
+### Failure-class mapping
+
+`SyncFailed(NetworkError)` and `SyncFailed(AuthError)` both render "Drive unavailable" rather than distinct labels. Rationale: the auth-error path needs a re-auth flow before it's actionable, and that flow lives in Story 4.5. Surfacing "auth error" distinctly in 4.4 would tease an action the user can't take. The triage-minded user reading the labels at all is the rare case; for them, the grey colour is the signal that the engine needs attention, and the actual error class is in the debug console.
+
+`SyncFailed(SyncError)` and `SyncFailed(StorageError)` render "Couldn't sync — will retry" (the verbatim 4.2 label, preserved so existing users see no wording regression). New error subclasses fall through to the generic case automatically — the `switch` is exhaustive on the abstract `AppError`.
+
+### Audit invariant
+
+4.4 adds zero new network surface, zero new dependencies, zero new SyncStatus variants, zero new outbox triggers, and zero new schema. The audit greps at the bottom of this doc continue to return the same results post-4.4 — verified pre-merge.
+
+---
+
 ## Network destinations
 
 The sync subsystem contacts EXACTLY these endpoints. Anything else is a bug.
@@ -227,6 +275,6 @@ Expected output: zero matches for the first two; the third should only surface t
 - `lib/core/database/drift_files/sync_triggers.drift` -- the trigger documentation source-of-truth.
 - `lib/core/drive/drive_credentials_store.dart` -- the auto-refreshing client wrapper.
 - `lib/core/drive/drive_sync_providers.dart` -- Riverpod wiring + the 250ms-debounced auto-push orchestrator.
-- `lib/core/widgets/sync_status_indicator.dart` -- the sidebar surface (text only at 4.2; dots at 4.4).
+- `lib/core/widgets/sync_status_indicator.dart` -- the sidebar surface (text + dot at 4.4).
 - `docs/auth-model.md` -- OAuth + credential storage (read first if you're new to this subsystem).
 - `_bmad-output/planning-artifacts/architecture.md` -- the "Sync Architecture" section is the architecture-audience version of this document.

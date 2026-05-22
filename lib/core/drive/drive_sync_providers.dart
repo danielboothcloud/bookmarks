@@ -73,6 +73,32 @@ final syncQueuePendingCountProvider = StreamProvider<int>((ref) {
   return ref.watch(syncQueueRepositoryProvider).watchPendingCount();
 });
 
+/// Whether the engine has ever emitted [SyncSynced] this session.
+/// Used by the [SyncStatusIndicator] to distinguish "synced and
+/// healthy" (green) from "no sync attempted yet, but no failure
+/// either" (amber "Awaiting initial sync"). Starts at `false`;
+/// becomes `true` on the first `SyncSynced` emit and stays `true`
+/// for the rest of the session — a subsequent `SyncFailed` does not
+/// reset the flag (the gate has been opened).
+///
+/// Cold-start latency trade-off: on a session start where the gate was
+/// opened in a prior session, the engine emits `SyncIdle` first; the
+/// first real `SyncSynced` arrives after the orchestrator's
+/// cold-start `sync()` cycle (~250 ms). The indicator briefly reads
+/// amber "Awaiting initial sync from Drive" during this window, then
+/// transitions to green. Accepted vs. a per-rebuild secure-storage
+/// read of `kDriveLastPulledAtKey`, which is heavier and less reactive.
+final hasEverSyncedProvider = StreamProvider<bool>((ref) async* {
+  yield false;
+  final statusStream = ref.watch(driveSyncServiceProvider).watchStatus();
+  await for (final status in statusStream) {
+    if (status is SyncSynced) {
+      yield true;
+      return;
+    }
+  }
+});
+
 /// Side-effect provider that wires three sync trigger events. Story
 /// 4.3 widens this from "auto-push" to "auto-sync": each trigger now
 /// invokes `sync()` (pull-then-push), so the orchestrator is the
