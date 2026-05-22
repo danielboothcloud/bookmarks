@@ -137,14 +137,23 @@ Story 4.3 makes the round-trip real. The orchestrator's three triggers (auth-sta
 
 | Local | Remote | Comparison | Decision |
 |---|---|---|---|
-| absent | present | — | upsert remote (FR23, FR36 first-launch) |
+| absent | present | remote `updatedAt` ≥ local `drive.last_pulled_at` (or first sync) | upsert remote (FR23, FR36 first-launch) |
+| absent | present | remote `updatedAt` < local `drive.last_pulled_at` | keep local-absent (we already saw this record at our last pull AND deleted it locally — don't resurrect; see "Symmetric tombstone-less heuristic" below) |
 | present | absent | local `updatedAt` < remote `lastModified` | delete local (the other device deleted it) |
 | present | absent | local `updatedAt` ≥ remote `lastModified` | keep local (our edit post-dates their snapshot) |
 | present | present | remote `updatedAt` > local | upsert remote (FR24 silent LWW) |
 | present | present | local `updatedAt` > remote | keep local |
 | present | present | equal | lexicographic `id` asc tiebreaker — vanishingly rare; defensive determinism |
 
-`bookmark_tags` has no per-link `updatedAt`. The merge is computed at parent-bookmark granularity: when the remote bookmark wins, replace the local junction set with the remote's `tagIds` array; when local wins, preserve local junctions.
+`bookmark_tags` has no per-link `updatedAt`. The merge is computed at parent-bookmark granularity: when the remote bookmark wins, replace the local junction set with the remote's `tagIds` array; when local wins, preserve local junctions. As of Story 4.5, `TagRepository.linkBookmarkTag` / `unlinkBookmarkTag` also bump the parent bookmark's `updated_at` so a local tag-only edit registers as a local LWW win — see "Symmetric tombstone-less heuristic" below.
+
+#### Symmetric tombstone-less heuristic (Story 4.5)
+
+The "in remote, not in local" branch has a *defaultive* answer (upsert) and an exceptional one (keep local absent). The exception only applies when `hasEverSynced == true` AND `lastPulledAtMs != null` AND `remoteUpdatedAt < lastPulledAtMs`. In English: *"we already merged this remote record at our last pull AND we've since deleted it locally, so don't resurrect it on the next pull."*
+
+This is the symmetric twin of the "in local, not in remote" decision: that branch uses `remoteLastModified` to disambiguate "they deleted it" from "we never pushed it"; this new branch uses `lastPulledAtMs` (the local moment we last successfully merged) to disambiguate "they added it" from "we deleted it after seeing it". Together they give us per-direction tombstone-less deletion semantics without a tombstones table.
+
+The original FR16 orphan-tag scenario this fixes: Device A unlinks the last bookmark from tag T. `TagRepository.unlinkBookmarkTag` hard-deletes T (FR16 orphan cleanup), emits a `delete tag T` sync_queue row, and pushes — remote's `tags[]` no longer contains T. On the next pull, remote *does* still contain T from a stale snapshot in some failure modes (or the local delete races a concurrent remote upsert). Without the heuristic, T is upserted back into local — orphan resurrected. With the heuristic, T's remote `updatedAt` predates `drive.last_pulled_at`, so we recognise it as "already seen and locally deleted" and skip the upsert. The same logic protects any local hard-delete from remote-side stale-snapshot resurrection.
 
 ### 3. Trigger feedback cleanup (the load-bearing design decision)
 
@@ -172,11 +181,11 @@ A remote envelope with `version != 1` is rejected with `Err(SyncError('Unsupport
 
 The 4.2-era first-connect probe still exists in `_pushInternal` as a fast-path for the empty-remote case. The merge path is now the authoritative gate-opening route — `sync()` pulls first, the merge opens the gate, push observes the gate is already open and proceeds. The probe is only reachable via a direct `push()` call (tests; a future debug-only "Push now" button); it's retained because removing it would force a rework of 4.2's test fixtures for zero behavioral gain.
 
-### 7. Acknowledged limitation: tag-only edits
+### 7. Tag-only edits (resolved in Story 4.5)
 
-The bookmark `updatedAt` is not advanced when a tag link changes (`TagRepository.linkBookmarkTag` / `unlinkBookmarkTag` write to `bookmark_tags` only). The merge engine compensates by treating the remote `tagIds` array as authoritative when the remote bookmark wins. But: if Device A edits a tag-link and Device B has a later bookmark title edit, Device B's bookmark wins LWW, and A's tag-only edit may not propagate.
+Previously: the bookmark `updatedAt` was not advanced when a tag link changed, so a local tag-only edit could lose LWW against an unrelated remote bookmark edit. As of Story 4.5, `TagRepository.linkBookmarkTag` / `unlinkBookmarkTag` wrap their writes in a transaction that ALSO bumps the parent bookmark's `updated_at` via `_bumpBookmarkUpdatedAt`. The `bookmarks` AU trigger emits a second `sync_queue` row alongside the `bookmark_tags` AI/AD row (both `entity_id = bookmarkId`); the push coalesces them into a single snapshot upload.
 
-A repository-level fix (advance `bookmarks.updated_at` on tag link change) is the proper resolution; deferred until smoke testing surfaces the divergence in real two-device use.
+Combined with the symmetric tombstone-less heuristic (see "LWW merge algorithm" above), this also defends against the FR16 orphan-tag resurrection: a local hard-delete of an orphan tag stays deleted across the next pull, because the remote tag row's `updatedAt` predates our `drive.last_pulled_at` and the merge engine recognises it as "already seen + locally deleted".
 
 ---
 

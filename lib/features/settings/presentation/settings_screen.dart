@@ -137,34 +137,38 @@ class _DisconnectConfirmation extends StatelessWidget {
             },
           ),
         },
-        child: Focus(
-          autofocus: true,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Disconnect from Drive? Local bookmarks stay.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.textMuted,
-                    ),
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Row(
-                children: [
-                  FilledButton(
-                    autofocus: true,
-                    onPressed: onConfirm,
-                    child: const Text('Disconnect'),
+        // Single autofocus claim: the destructive FilledButton. An outer
+        // `Focus(autofocus: true)` would compete with the button's own
+        // autofocus and leave it ambiguous which descendant ends up with
+        // primary focus — Esc would still work via Shortcuts bubbling
+        // from either, but Enter (the button's commit key) only fires
+        // when the button's FocusNode itself holds focus. AC3 requires
+        // the FilledButton to be autofocused so Enter commits.
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Disconnect from Drive? Local bookmarks stay.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textMuted,
                   ),
-                  const SizedBox(width: AppSpacing.sm),
-                  TextButton(
-                    onPressed: onCancel,
-                    child: const Text('Cancel'),
-                  ),
-                ],
-              ),
-            ],
-          ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Row(
+              children: [
+                FilledButton(
+                  autofocus: true,
+                  onPressed: onConfirm,
+                  child: const Text('Disconnect'),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                TextButton(
+                  onPressed: onCancel,
+                  child: const Text('Cancel'),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

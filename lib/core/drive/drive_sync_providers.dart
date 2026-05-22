@@ -185,6 +185,15 @@ final autoPushOrchestratorProvider = Provider<void>((ref) {
   ref.listen<AsyncValue<bool>>(
     connectivityOnlineProvider,
     (prev, next) {
+      // `AsyncError` and `AsyncLoading` both surface as `next.value ==
+      // null`, conservatively treated as "offline / unknown" — we
+      // never fire `sync()` from an unresolved state. The downside is
+      // a recovery sequence `online -> error -> online` is silently
+      // collapsed (wasOnline=true at the error tick, isOnline=true at
+      // recovery → no transition fired). Acceptable: a real recovery
+      // from a `connectivity_plus` error is almost always followed by
+      // another OS connectivity event within seconds, which the
+      // orchestrator's queue / auth / lifecycle triggers also cover.
       final wasOnline = prev?.value ?? false;
       final isOnline = next.value ?? false;
       // Only fire on `offline -> online`. Same-state re-emits

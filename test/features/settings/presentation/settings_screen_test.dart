@@ -202,4 +202,37 @@ void main() {
 
     expect(controller.disconnectCalls, 1);
   });
+
+  // Note: focus introspection via `Focus.of(element)` or
+  // `FocusManager.instance.primaryFocus` is brittle inside widget tests
+  // because the FilledButton's autofocus claim resolves on an end-of-frame
+  // callback that `pumpAndSettle` doesn't always advance to. The
+  // load-bearing assertion is the BEHAVIOURAL one below: Enter triggers
+  // disconnect(). If the FilledButton didn't have primary focus, the key
+  // event wouldn't reach its onPressed.
+
+  testWidgets(
+      'Enter on the confirmation FilledButton invokes disconnect()',
+      (tester) async {
+    final controller = _FakeDriveAccountController();
+    final container = _makeContainer(
+      const DriveAuthState.connected(
+        email: 'alice@example.com',
+        fileId: 'file-1',
+      ),
+      controller: controller,
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(_wrap(container));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Disconnect'));
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(controller.disconnectCalls, 1,
+        reason: 'Enter on the autofocused FilledButton commits the action');
+  });
 }

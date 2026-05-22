@@ -43,13 +43,16 @@ class DriveAccountController extends Notifier<void> {
     // Step 1: clear the outbox so a soon-to-be-wiped credential set
     // can't fire a final push during the brief window between (2) and
     // (3). Local data is unaffected.
+    //
+    // Failures log unconditionally (not gated on kDebugMode) so a
+    // release-build Keychain hiccup is observable in platform logs —
+    // a silent failure here is the cross-account-leak risk the
+    // disconnect flow is explicitly designed to prevent.
     try {
       await ref.read(syncQueueRepositoryProvider).clear();
     } catch (e, s) {
-      if (kDebugMode) {
-        debugPrint('DriveAccountController.disconnect: queue clear failed: '
-            '$e\n$s');
-      }
+      debugPrint('DriveAccountController.disconnect: queue clear failed: '
+          '$e\n$s');
     }
 
     // Step 2: close the push gate so a future reconnect to a different
@@ -59,10 +62,8 @@ class DriveAccountController extends Notifier<void> {
           .read(flutterSecureStorageProvider)
           .delete(key: kDriveLastPulledAtKey);
     } catch (e, s) {
-      if (kDebugMode) {
-        debugPrint('DriveAccountController.disconnect: gate clear failed: '
-            '$e\n$s');
-      }
+      debugPrint('DriveAccountController.disconnect: gate clear failed: '
+          '$e\n$s');
     }
 
     // Step 3: wipe tokens and flip auth state to disconnected. The
