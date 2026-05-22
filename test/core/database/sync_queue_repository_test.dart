@@ -109,6 +109,62 @@ void main() {
     expect(remaining.map((r) => r.entityId).toList(), ['b2']);
   });
 
+  test('clear() on an empty queue returns 0 and leaves the queue empty',
+      () async {
+    final count = await repo.clear();
+    expect(count, 0);
+    expect(await repo.drain(), isEmpty);
+  });
+
+  test('clear() on a populated queue returns N and empties the queue',
+      () async {
+    await _seed('upsert', 'bookmark', 'b1');
+    await _seed('upsert', 'folder', 'f1');
+    await _seed('delete', 'tag', 't1');
+
+    expect(await repo.drain(), hasLength(3));
+
+    final count = await repo.clear();
+    expect(count, 3);
+    expect(await repo.drain(), isEmpty);
+  });
+
+  test('clear() does not touch any other table', () async {
+    // Seed a bookmark via the production path so the outbox trigger fires
+    // a sync_queue row alongside the bookmark row.
+    await db.customStatement(
+      'INSERT INTO bookmarks (id, url, title, notes, folder_id, '
+      'favicon_base64, created_at, updated_at) '
+      "VALUES ('b1', 'https://example.com', 'Title', NULL, NULL, NULL, 1, 1)",
+    );
+    await db.customStatement(
+      "INSERT INTO folders (id, name, parent_id, created_at, updated_at) "
+      "VALUES ('f1', 'Folder', NULL, 1, 1)",
+    );
+
+    final bookmarkRowsBefore = await db
+        .customSelect('SELECT COUNT(*) AS c FROM bookmarks')
+        .getSingle();
+    final folderRowsBefore = await db
+        .customSelect('SELECT COUNT(*) AS c FROM folders')
+        .getSingle();
+    expect(bookmarkRowsBefore.read<int>('c'), 1);
+    expect(folderRowsBefore.read<int>('c'), 1);
+
+    await repo.clear();
+
+    final bookmarkRowsAfter = await db
+        .customSelect('SELECT COUNT(*) AS c FROM bookmarks')
+        .getSingle();
+    final folderRowsAfter = await db
+        .customSelect('SELECT COUNT(*) AS c FROM folders')
+        .getSingle();
+    expect(bookmarkRowsAfter.read<int>('c'), 1,
+        reason: 'clear must not touch bookmarks');
+    expect(folderRowsAfter.read<int>('c'), 1,
+        reason: 'clear must not touch folders');
+  });
+
   test('watchPendingCount re-emits after deleteByIds drains the queue',
       () async {
     final emissions = <int>[];

@@ -98,13 +98,22 @@ class DriveCredentialsStore {
   /// The returned client owns a subscription to `credentialUpdates`;
   /// closing the client unsubscribes and stops persisting refreshes.
   /// Callers MUST `client.close()` when done.
+  ///
+  /// [base] is wrapped in a non-closing shim before being handed to
+  /// `autoRefreshingClient`. googleapis_auth's `AutoRefreshingClient`
+  /// inherits `DelegatingClient`'s default `closeUnderlyingClient: true`
+  /// (the convenience `autoRefreshingClient(...)` function doesn't
+  /// expose the flag), so `authClient.close()` would otherwise tear
+  /// down our singleton `httpClientProvider` instance — every cycle
+  /// would burn the shared client and the next OAuth POST / Drive
+  /// request would fail with "Client is already closed".
   Future<AutoRefreshingAuthClient?> authenticatedClient(http.Client base) async {
     final creds = await read();
     if (creds == null) return null;
     final client = autoRefreshingClient(
       ClientId(_clientId, _clientSecret),
       creds,
-      base,
+      _NonClosingHttpClient(base),
     );
     // Persist refreshed creds. `credentialUpdates` fires after every
     // successful refresh; the listen runs on the client's lifetime.
@@ -127,5 +136,24 @@ class DriveCredentialsStore {
       },
     );
     return client;
+  }
+}
+
+/// Forwards every `send` to [_inner] and no-ops `close`. Used to hand a
+/// shared singleton [http.Client] to googleapis_auth's
+/// `autoRefreshingClient` without letting the auth client claim
+/// ownership of its lifetime — see [DriveCredentialsStore.authenticatedClient].
+class _NonClosingHttpClient extends http.BaseClient {
+  _NonClosingHttpClient(this._inner);
+  final http.Client _inner;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) =>
+      _inner.send(request);
+
+  @override
+  void close() {
+    // Intentionally a no-op. The wrapped client is owned by
+    // `httpClientProvider` and closed only on container teardown.
   }
 }

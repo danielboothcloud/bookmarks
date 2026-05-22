@@ -140,6 +140,72 @@ void main() {
   });
 
   test(
+      'linkBookmarkTag bumps the parent bookmark updated_at so the per-record '
+      'LWW merge keeps the local junction (Story 4.5 smoke regression)',
+      () async {
+    // Seed a bookmark with a known, deliberately old updated_at.
+    const oldStamp = 1000;
+    await db.customStatement(
+      'INSERT INTO bookmarks (id, url, title, notes, folder_id, '
+      'favicon_base64, created_at, updated_at) '
+      "VALUES ('b1', 'https://example.com', 'Title', NULL, NULL, NULL, ?, ?)",
+      [oldStamp, oldStamp],
+    );
+
+    final upsert = await repo.upsertByName('Flutter');
+    final tagId = (upsert as Ok<Tag, AppError>).value.id;
+
+    final result = await repo.linkBookmarkTag('b1', tagId);
+    expect(result, isA<Ok<void, AppError>>());
+
+    final row = await db
+        .customSelect(
+          'SELECT updated_at FROM bookmarks WHERE id = ?',
+          variables: [Variable<String>('b1')],
+        )
+        .getSingle();
+    expect(row.read<int>('updated_at'), greaterThan(oldStamp),
+        reason: 'linkBookmarkTag must bump the parent bookmark updatedAt so '
+            'the next LWW merge keeps the local tag link (Story 4.5 smoke).');
+  });
+
+  test(
+      'unlinkBookmarkTag bumps the parent bookmark updated_at so the per-record '
+      'LWW merge keeps the local removal (same regression as linkBookmarkTag)',
+      () async {
+    const oldStamp = 1000;
+    await db.customStatement(
+      'INSERT INTO bookmarks (id, url, title, notes, folder_id, '
+      'favicon_base64, created_at, updated_at) '
+      "VALUES ('b1', 'https://example.com', 'Title', NULL, NULL, NULL, ?, ?)",
+      [oldStamp, oldStamp],
+    );
+
+    final upsert = await repo.upsertByName('Flutter');
+    final tagId = (upsert as Ok<Tag, AppError>).value.id;
+    await repo.linkBookmarkTag('b1', tagId);
+
+    // Reset updated_at to the old stamp so we can observe the unlink bump
+    // independently of the link bump above.
+    await db.customStatement(
+      'UPDATE bookmarks SET updated_at = ? WHERE id = ?',
+      [oldStamp, 'b1'],
+    );
+
+    final result = await repo.unlinkBookmarkTag('b1', tagId);
+    expect(result, isA<Ok<void, AppError>>());
+
+    final row = await db
+        .customSelect(
+          'SELECT updated_at FROM bookmarks WHERE id = ?',
+          variables: [Variable<String>('b1')],
+        )
+        .getSingle();
+    expect(row.read<int>('updated_at'), greaterThan(oldStamp),
+        reason: 'unlinkBookmarkTag must bump the parent bookmark updatedAt');
+  });
+
+  test(
       'unlinkBookmarkTag preserves the Tag row when OTHER bookmarks still '
       'reference it (only the last-junction case removes the tag)', () async {
     final upsert = await repo.upsertByName('Flutter');

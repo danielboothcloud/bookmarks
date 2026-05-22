@@ -72,4 +72,15 @@ class SyncQueueRepository {
     if (ids.isEmpty) return Future.value(0);
     return (_db.delete(_db.syncQueue)..where((t) => t.id.isIn(ids))).go();
   }
+
+  /// Deletes every row in `sync_queue`. Used by Story 4.5's disconnect
+  /// flow — clearing pre-disconnect queue rows defends against the
+  /// cross-account leak case (reconnecting to a different Drive account
+  /// would otherwise push the prior account's queued changes to the new
+  /// account's `bookmarks.json`). Returns the count deleted.
+  ///
+  /// Only touches `sync_queue`; the source tables (bookmarks, folders,
+  /// tags, bookmark_tags) are untouched — local data persists across
+  /// disconnect.
+  Future<int> clear() => _db.delete(_db.syncQueue).go();
 }

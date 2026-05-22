@@ -1,5 +1,14 @@
 import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+/// Provider seam over [openExternal] for test override. Production code
+/// reads this provider when it needs to launch a URL inside an Action
+/// or controller that already has a `Ref`; widgets without a `Ref`
+/// (e.g. `BookmarkListItem`'s `onDoubleTap`) call [openExternal]
+/// directly. Tests override with a recording stub.
+final openExternalProvider =
+    Provider<Future<void> Function(String)>((_) => openExternal);
 
 /// Opens [rawUrl] in the user's default external browser. Uses
 /// [LaunchMode.externalApplication] explicitly so platforms that would

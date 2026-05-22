@@ -9,6 +9,35 @@ import 'package:googleapis_auth/googleapis_auth.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+/// Counts `send` and `close` invocations. Throws on `send` after
+/// `close` — mirroring `IOClient`'s "Client is already closed" behaviour
+/// that production code would surface.
+class _TrackingClient extends http.BaseClient {
+  int sendCount = 0;
+  int closeCount = 0;
+  bool _closed = false;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (_closed) {
+      throw http.ClientException('Client is already closed.', request.url);
+    }
+    sendCount++;
+    return http.StreamedResponse(
+      Stream<List<int>>.value(utf8.encode('{}')),
+      200,
+      headers: const {'content-type': 'application/json'},
+    );
+  }
+
+  @override
+  void close() {
+    closeCount++;
+    _closed = true;
+    super.close();
+  }
+}
+
 class _InMemorySecureStorage implements FlutterSecureStorage {
   final Map<String, String> store = {};
 
@@ -135,6 +164,52 @@ void main() {
     expect(client, isNotNull);
     expect(client!.credentials.accessToken.data, 'access-x');
     client.close();
+  });
+
+  test(
+      'authenticatedClient does NOT close the underlying base client when '
+      'the auth client is closed (smoke regression — Story 4.5 reconnect)',
+      () async {
+    // googleapis_auth's autoRefreshingClient(...) doesn't expose
+    // closeUnderlyingClient and inherits DelegatingClient's default of
+    // `true`. Without the wrapping shim in
+    // DriveCredentialsStore.authenticatedClient, this test's second
+    // .send() would throw "Client is already closed" — exactly the
+    // smoke failure that surfaced on reconnect after Story 4.5.
+    storage.store[DriveStorageKeys.accessToken] = 'access-x';
+    storage.store[DriveStorageKeys.refreshToken] = 'refresh-x';
+    storage.store[DriveStorageKeys.expiresAt] = DateTime.now()
+        .toUtc()
+        .add(const Duration(hours: 1))
+        .toIso8601String();
+
+    // A real http.Client subclass — not MockClient — so .close() is
+    // observable and reusing-after-close throws like the production
+    // IOClient does. Use a counting BaseClient so we can also verify
+    // both send paths landed.
+    final base = _TrackingClient();
+
+    // First auth-client lifecycle: get → close.
+    final first = await credStore.authenticatedClient(base);
+    expect(first, isNotNull);
+    await first!.get(Uri.parse('https://example.com/one'));
+    first.close();
+
+    expect(base.closeCount, 0,
+        reason: 'closing the auth client must NOT close the base client');
+
+    // Second auth-client lifecycle on the SAME base must still succeed.
+    final second = await credStore.authenticatedClient(base);
+    expect(second, isNotNull);
+    await second!.get(Uri.parse('https://example.com/two'));
+    second.close();
+
+    expect(base.sendCount, 2,
+        reason: 'both .get() calls reached the underlying base client');
+    expect(base.closeCount, 0,
+        reason: 'base client survived both auth-client lifecycles');
+
+    base.close();
   });
 
   test('authenticatedClient persists refreshed tokens via the '

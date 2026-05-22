@@ -84,6 +84,7 @@ class MergeApplier {
   Future<Result<void, AppError>> apply(
     DriveBookmarksFile remote, {
     bool hasEverSynced = true,
+    int? lastPulledAtMs,
   }) async {
     try {
       await _db.transaction(() async {
@@ -92,6 +93,7 @@ class MergeApplier {
           local: local,
           remote: remote,
           hasEverSynced: hasEverSynced,
+          lastPulledAtMs: lastPulledAtMs,
         );
         final cursorId = await _readMaxQueueId();
 

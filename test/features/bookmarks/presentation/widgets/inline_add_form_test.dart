@@ -298,6 +298,81 @@ void main() {
     expect(repo.savedBookmarks.last.folderId, 'a');
   });
 
+  testWidgets(
+      'Shift+Enter from the URL field saves the form (skips tabbing to '
+      'the Save button)', (tester) async {
+    final repo = _FakeRepo();
+    var closed = false;
+    await tester.pumpWidget(_wrap(
+      repo: repo,
+      onClose: () => closed = true,
+      initialSelectedFolderId: 'a',
+      folders: [_folder('a', 'Personal')],
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.byType(TextField).first, 'https://example.com/shift');
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pumpAndSettle();
+
+    expect(repo.savedBookmarks, hasLength(1));
+    expect(repo.savedBookmarks.last.url, 'https://example.com/shift');
+    expect(closed, isTrue);
+  });
+
+  testWidgets(
+      'Shift+Enter from the title field also saves (any-field convenience)',
+      (tester) async {
+    final repo = _FakeRepo();
+    await tester.pumpWidget(_wrap(
+      repo: repo,
+      onClose: () {},
+      initialSelectedFolderId: 'a',
+      folders: [_folder('a', 'Personal')],
+    ));
+    await tester.pumpAndSettle();
+
+    // URL is required for save() to succeed; populate it first.
+    await tester.enterText(
+        find.byType(TextField).first, 'https://example.com/title-path');
+    // Now focus the title field (second TextField in the form).
+    await tester.tap(find.byType(TextField).at(1));
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pumpAndSettle();
+
+    expect(repo.savedBookmarks, hasLength(1));
+    expect(repo.savedBookmarks.last.url, 'https://example.com/title-path');
+  });
+
+  testWidgets(
+      'Shift+Enter with empty URL surfaces the URL error (same fail-fast '
+      'as the Save button)', (tester) async {
+    final repo = _FakeRepo();
+    await tester.pumpWidget(_wrap(
+      repo: repo,
+      onClose: () {},
+      initialSelectedFolderId: 'a',
+      folders: [_folder('a', 'Personal')],
+    ));
+    await tester.pumpAndSettle();
+
+    // URL field intentionally left empty.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pumpAndSettle();
+
+    expect(repo.savedBookmarks, isEmpty,
+        reason: 'empty URL must short-circuit save()');
+  });
+
   testWidgets('pressing Esc cancels without saving', (tester) async {
     final repo = _FakeRepo();
     var closed = false;

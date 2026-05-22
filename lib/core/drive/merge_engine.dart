@@ -19,7 +19,8 @@ import 'models/drive_tag.dart';
 ///    a single transaction.
 ///
 /// Algorithm (per record id, per entity type):
-///   in remote, not in local                  -> upsert (FR23, FR36)
+///   in remote, not in local, rUpd >= lPull   -> upsert (FR23, FR36)
+///   in remote, not in local, rUpd <  lPull   -> keep local (we deleted it)
 ///   in local, not in remote, lUpd >= rLast   -> keep local
 ///   in local, not in remote, lUpd <  rLast   -> delete local
 ///   in both, rUpd >  lUpd                    -> upsert remote (FR24)
@@ -32,6 +33,15 @@ import 'models/drive_tag.dart';
 ///    device knew when it pushed). Used ONLY in the "missing from
 ///    remote" branch — a local row whose updatedAt predates that
 ///    moment is interpreted as "the other device deleted it".
+///  * `lPull` = local `drive.last_pulled_at` (the moment we last
+///    successfully merged a remote into local). Used ONLY in the
+///    "missing from local, present in remote" branch — a remote
+///    record whose updatedAt predates our last pull is interpreted
+///    as "we already saw it AND deleted it locally between then and
+///    now; don't resurrect". Symmetric tombstone-less heuristic to
+///    the `lLast` branch above. Without this gate, an FR16 orphan-tag
+///    deletion is reverted on the next pull because remote still
+///    carries the tag from the prior session.
 ///  * `bookmark_tags` has no per-link `updatedAt`. The merge is
 ///    computed at the parent-bookmark granularity: the remote
 ///    bookmark's `tagIds` array replaces the local junction set IFF
@@ -65,6 +75,7 @@ class MergeEngine {
     required LocalSnapshot local,
     required DriveBookmarksFile remote,
     bool hasEverSynced = true,
+    int? lastPulledAtMs,
   }) {
     final remoteLastModified =
         DateTime.parse(remote.lastModified).toUtc().millisecondsSinceEpoch;
@@ -112,6 +123,7 @@ class MergeEngine {
         remoteLastModified: remoteLastModified,
         id: id,
         hasEverSynced: hasEverSynced,
+        lastPulledAtMs: lastPulledAtMs,
       );
       switch (decision) {
         case _Decision.upsertRemote:
@@ -145,6 +157,7 @@ class MergeEngine {
         remoteLastModified: remoteLastModified,
         id: id,
         hasEverSynced: hasEverSynced,
+        lastPulledAtMs: lastPulledAtMs,
       );
       switch (decision) {
         case _Decision.upsertRemote:
@@ -176,6 +189,7 @@ class MergeEngine {
         remoteLastModified: remoteLastModified,
         id: id,
         hasEverSynced: hasEverSynced,
+        lastPulledAtMs: lastPulledAtMs,
       );
       switch (decision) {
         case _Decision.upsertRemote:
@@ -205,8 +219,24 @@ class MergeEngine {
     required int remoteLastModified,
     required String id,
     required bool hasEverSynced,
+    required int? lastPulledAtMs,
   }) {
     if (localUpdatedAt == null && remoteUpdatedAt != null) {
+      // Missing-from-local branch. Default: the remote record is new
+      // to us, upsert it. Exception: if we've synced before AND the
+      // remote record's updatedAt is older than our last-pulled
+      // timestamp, then we already saw this exact remote record at our
+      // last pull AND deleted it locally since. Don't resurrect.
+      //
+      // Symmetric tombstone-less heuristic to the missing-from-remote
+      // branch below. Without this, an FR16 orphan-tag deletion (or
+      // any local-side delete of a still-present remote record) is
+      // reverted on the next pull.
+      if (hasEverSynced &&
+          lastPulledAtMs != null &&
+          remoteUpdatedAt < lastPulledAtMs) {
+        return _Decision.keepLocal;
+      }
       return _Decision.upsertRemote;
     }
     if (localUpdatedAt == null && remoteUpdatedAt == null) {

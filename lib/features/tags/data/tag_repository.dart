@@ -213,17 +213,29 @@ class TagRepository implements ITagRepository {
     String tagId,
   ) async {
     try {
-      // INSERT OR IGNORE on the composite PK: re-linking the same
-      // (bookmarkId, tagId) is a no-op rather than an error. Matches AC1's
-      // "submitting the same name twice is idempotent".
-      await _db.into(_db.bookmarkTags).insert(
-            BookmarkTagsCompanion(
-              bookmarkId: Value(bookmarkId),
-              tagId: Value(tagId),
-              createdAt: Value(DateTime.now().millisecondsSinceEpoch),
-            ),
-            mode: InsertMode.insertOrIgnore,
-          );
+      await _db.transaction(() async {
+        // INSERT OR IGNORE on the composite PK: re-linking the same
+        // (bookmarkId, tagId) is a no-op rather than an error. Matches
+        // AC1's "submitting the same name twice is idempotent".
+        await _db.into(_db.bookmarkTags).insert(
+              BookmarkTagsCompanion(
+                bookmarkId: Value(bookmarkId),
+                tagId: Value(tagId),
+                createdAt: Value(DateTime.now().millisecondsSinceEpoch),
+              ),
+              mode: InsertMode.insertOrIgnore,
+            );
+        // Bump the parent bookmark's updatedAt so the per-record LWW
+        // merge (merge_engine.dart) sees local > remote on the next
+        // pull. Without this bump, the local link is wiped on tie
+        // because _decide() falls into upsertRemote → the
+        // bookmarkTagLinksToReplace branch replaces local junctions
+        // with the (stale) remote tagIds. The bookmark_tags trigger
+        // already enqueues an outbox row with entity_id = bookmarkId;
+        // the bookmark UPDATE adds a second one (both upserts; the
+        // push coalesces them into a single snapshot).
+        await _bumpBookmarkUpdatedAt(bookmarkId);
+      });
       return const Ok<void, AppError>(null);
     } catch (e) {
       return Err<void, AppError>(StorageError(e.toString()));
@@ -254,6 +266,9 @@ class TagRepository implements ITagRepository {
           variables: [Variable<String>(tagId), Variable<String>(tagId)],
           updates: {_db.tags},
         );
+        // Same rationale as linkBookmarkTag: bump the parent so LWW
+        // keeps the removal on the next merge.
+        await _bumpBookmarkUpdatedAt(bookmarkId);
       });
       // We DON'T return Err on affected==0 (unlike BookmarkRepository.delete
       // which does for NotFound semantics). An idempotent unlink is the right
@@ -263,6 +278,20 @@ class TagRepository implements ITagRepository {
     } catch (e) {
       return Err<void, AppError>(StorageError(e.toString()));
     }
+  }
+
+  /// Sets `bookmarks.updated_at = now` for [bookmarkId]. No-op if the
+  /// bookmark row doesn't exist (UPDATE of zero rows). The UPDATE also
+  /// fires the bookmarks AU outbox trigger; that's intentional — the
+  /// resulting sync_queue row carries the bumped timestamp to remote
+  /// via the next push.
+  Future<void> _bumpBookmarkUpdatedAt(String bookmarkId) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return _db.customUpdate(
+      'UPDATE bookmarks SET updated_at = ? WHERE id = ?',
+      variables: [Variable<int>(now), Variable<String>(bookmarkId)],
+      updates: {_db.bookmarks},
+    );
   }
 
   @override

@@ -44,6 +44,11 @@ dependencies:
   # URL metadata (title, OG tags) -- favicon bytes fetched directly via http
   metadata_fetch: ^0.4.2
 
+  # HTML parser — used to extract <link rel="icon"> hrefs for favicon
+  # discovery (robustness fix). Already a transitive dep of metadata_fetch;
+  # declared here because lib/ imports it directly.
+  html: ^0.15.4
+
   # IDs
   uuid: ^4.5.1
 

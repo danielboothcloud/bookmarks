@@ -611,4 +611,143 @@ void main() {
     expect(parsed.bookmarks, isEmpty);
     expect(await repo.drain(), isEmpty);
   });
+
+  // ---------------------------------------------------------------------
+  // Story 4.5: DriveSyncService.reset()
+  // ---------------------------------------------------------------------
+
+  test('reset() from idle: leaves currentStatus at SyncIdle', () async {
+    expect(service.currentStatus, isA<SyncIdle>());
+    await service.reset();
+    expect(service.currentStatus, isA<SyncIdle>());
+  });
+
+  test(
+      'reset() from synced: clears _lastSyncedAt; next empty-queue push '
+      'emits SyncIdle (not SyncSynced with the stale timestamp)',
+      () async {
+    // First push: queue has one row -> SyncSynced(at: ...).
+    await _seedBookmark(db, 'b1');
+    final firstPush = await service.push(fileId: 'file-id-1');
+    expect(firstPush, isA<Ok<void, AppError>>());
+    expect(service.currentStatus, isA<SyncSynced>());
+
+    final statuses = <SyncStatus>[];
+    final sub = service.watchStatus().listen(statuses.add);
+
+    await service.reset();
+
+    expect(service.currentStatus, isA<SyncIdle>());
+
+    // Subsequent push with empty queue: should emit SyncIdle (the
+    // _lastSyncedAt fallback is null again).
+    final secondPush = await service.push(fileId: 'file-id-1');
+    expect(secondPush, isA<Ok<void, AppError>>());
+    expect(service.currentStatus, isA<SyncIdle>(),
+        reason: 'reset must have cleared _lastSyncedAt');
+
+    await sub.cancel();
+  });
+
+  test('reset() from failed: re-emits SyncIdle clearing the failure',
+      () async {
+    final failingServer = _FakeDriveServer();
+    // Script three 500s to defeat the default retry policy.
+    failingServer.updateScript.addAll([
+      () => http.Response('boom', 500),
+      () => http.Response('boom', 500),
+      () => http.Response('boom', 500),
+    ]);
+    final failingService = _buildService(
+      db: db,
+      storage: storage,
+      client: failingServer.buildClient(),
+      retryPolicy: const DriveRetryPolicy(
+        maxAttempts: 1,
+        initialDelay: Duration(milliseconds: 1),
+        maxDelay: Duration(milliseconds: 5),
+      ),
+    );
+    addTearDown(failingService.dispose);
+
+    await _seedBookmark(db, 'b1');
+    final pushResult = await failingService.push(fileId: 'file-id-1');
+    expect(pushResult, isA<Err<void, AppError>>());
+    expect(failingService.currentStatus, isA<SyncFailed>());
+
+    await failingService.reset();
+    expect(failingService.currentStatus, isA<SyncIdle>());
+  });
+
+  test(
+      'reset() is idempotent: two back-to-back calls do not throw and '
+      'leave the engine in SyncIdle', () async {
+    // First push a synced state so reset has something to clear.
+    await _seedBookmark(db, 'b1');
+    final r = await service.push(fileId: 'file-id-1');
+    expect(r, isA<Ok<void, AppError>>());
+    expect(service.currentStatus, isA<SyncSynced>());
+
+    await service.reset();
+    await service.reset();
+
+    expect(service.currentStatus, isA<SyncIdle>());
+  });
+
+  test('reset() with in-flight cycle awaits the in-flight before emitting',
+      () async {
+    // Build a MockClient that holds the upload PATCH open until released
+    // via a Completer. The probe / GET path still completes normally.
+    final gate = Completer<void>();
+    final holdingClient = MockClient.streaming((request, bodyStream) async {
+      final url = request.url;
+      if (url.path.startsWith('/upload/drive/v3/files/')) {
+        await bodyStream
+            .fold<List<int>>(<int>[], (acc, chunk) => acc..addAll(chunk));
+        await gate.future;
+        final ok = jsonEncode({'id': 'file-id-1', 'name': 'bookmarks.json'});
+        return http.StreamedResponse(
+          Stream<List<int>>.value(utf8.encode(ok)),
+          200,
+          headers: const {'content-type': 'application/json'},
+        );
+      }
+      return http.StreamedResponse(
+        Stream<List<int>>.value(utf8.encode('{}')),
+        200,
+        headers: const {'content-type': 'application/json'},
+      );
+    });
+    final holdingService = _buildService(
+      db: db,
+      storage: storage,
+      client: holdingClient,
+    );
+    addTearDown(holdingService.dispose);
+
+    await _seedBookmark(db, 'b1');
+
+    final pushFuture = holdingService.push(fileId: 'file-id-1');
+
+    // Let the push reach the in-flight SyncPushing state.
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(holdingService.currentStatus, isA<SyncPushing>());
+
+    // reset() should await the in-flight before emitting SyncIdle.
+    var resetReturned = false;
+    final resetFuture = holdingService.reset().whenComplete(() {
+      resetReturned = true;
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(resetReturned, isFalse,
+        reason: 'reset must not return while a cycle is in-flight');
+
+    // Release the in-flight; both futures should complete.
+    gate.complete();
+    await pushFuture;
+    await resetFuture;
+
+    expect(holdingService.currentStatus, isA<SyncIdle>(),
+        reason: "reset's terminal SyncIdle wins after in-flight finishes");
+  });
 }

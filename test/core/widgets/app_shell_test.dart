@@ -3,6 +3,7 @@ import 'package:bookmarks/core/error/result.dart';
 import 'package:bookmarks/core/router/app_router.dart';
 import 'package:bookmarks/core/theme/app_spacing.dart';
 import 'package:bookmarks/core/theme/app_theme.dart';
+import 'package:bookmarks/core/util/url_launcher_service.dart';
 import 'package:bookmarks/core/widgets/app_shell.dart';
 import 'package:bookmarks/core/widgets/sidebar.dart';
 import 'package:bookmarks/features/bookmarks/presentation/widgets/bookmark_detail_pane.dart';
@@ -54,19 +55,60 @@ class _EmptySearchRepository implements ISearchRepository {
       Stream.value(const <Bookmark>[]);
 }
 
-Widget _buildApp({Map<String?, List<Folder>>? folderTree}) {
+Widget _buildApp({
+  Map<String?, List<Folder>>? folderTree,
+  List<Bookmark>? bookmarks,
+  Future<void> Function(String)? openExternalOverride,
+}) {
   return ProviderScope(
     overrides: [
-      bookmarkRepositoryProvider.overrideWithValue(_FakeBookmarkRepository()),
+      bookmarkRepositoryProvider.overrideWithValue(
+        bookmarks == null
+            ? _FakeBookmarkRepository()
+            : _SeededBookmarkRepository(bookmarks),
+      ),
       searchRepositoryProvider.overrideWithValue(_EmptySearchRepository()),
       if (folderTree != null)
         folderChildrenIndexProvider.overrideWithValue(folderTree),
+      if (openExternalOverride != null)
+        openExternalProvider.overrideWithValue(openExternalOverride),
     ],
     child: MaterialApp.router(
       theme: AppTheme.build(),
       routerConfig: buildRouter(),
     ),
   );
+}
+
+/// Bookmark repo seeded with a fixed list. Used by the Shift+Enter
+/// open-bookmark test to make `selectedBookmarkProvider` resolve to a
+/// real value when the test selects an id that lives in this list.
+class _SeededBookmarkRepository implements IBookmarkRepository {
+  _SeededBookmarkRepository(this._bookmarks);
+  final List<Bookmark> _bookmarks;
+
+  @override
+  Stream<List<Bookmark>> watchAll() => Stream.value(_bookmarks);
+
+  @override
+  Stream<List<Bookmark>> watchByTagId(String tagId) =>
+      const Stream<List<Bookmark>>.empty();
+
+  @override
+  Future<Result<Bookmark, AppError>> getById(String id) async {
+    for (final b in _bookmarks) {
+      if (b.id == id) return Ok<Bookmark, AppError>(b);
+    }
+    return const Err<Bookmark, AppError>(StorageError('not found'));
+  }
+
+  @override
+  Future<Result<Bookmark, AppError>> save(Bookmark bookmark) async =>
+      Ok<Bookmark, AppError>(bookmark);
+
+  @override
+  Future<Result<void, AppError>> delete(String id) async =>
+      const Ok<void, AppError>(null);
 }
 
 Folder _ff(String id, {String? parentId}) => Folder(
@@ -282,6 +324,105 @@ void main() {
       expect(container.read(pendingDeleteIdProvider), isNull,
           reason: 'EditableText guard must suppress the delete prompt so '
               'Backspace deletes a character, not a bookmark');
+    });
+
+    testWidgets(
+        'Shift+Enter opens the currently-selected bookmark in the system '
+        'browser via openExternalProvider', (tester) async {
+      final launched = <String>[];
+      final bookmark = Bookmark(
+        id: 'b-open',
+        url: 'https://example.com/article',
+        title: 'Example',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1000),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+      );
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(
+        bookmarks: [bookmark],
+        openExternalOverride: (url) async => launched.add(url),
+      ));
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedBookmarkIdProvider.notifier).select('b-open');
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pumpAndSettle();
+
+      expect(launched, ['https://example.com/article']);
+    });
+
+    testWidgets(
+        'Shift+Enter with NO bookmark selected is a no-op (action disabled '
+        'so the key event simply propagates)', (tester) async {
+      final launched = <String>[];
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(
+        openExternalOverride: (url) async => launched.add(url),
+      ));
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      expect(container.read(selectedBookmarkIdProvider), isNull);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pumpAndSettle();
+
+      expect(launched, isEmpty);
+    });
+
+    testWidgets(
+        'Shift+Enter with focus inside an EditableText is suppressed (the '
+        'EditableText guard prevents hijacking newline / form-submit '
+        'keystrokes)', (tester) async {
+      final launched = <String>[];
+      final bookmark = Bookmark(
+        id: 'b-edit',
+        url: 'https://example.com/edit',
+        title: 'Editing',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1000),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+      );
+      await tester.binding.setSurfaceSize(const Size(1200, 800));
+      await tester.pumpWidget(_buildApp(
+        bookmarks: [bookmark],
+        openExternalOverride: (url) async => launched.add(url),
+      ));
+      await tester.pumpAndSettle();
+
+      final ctx = tester.element(find.byType(Sidebar));
+      final container = ProviderScope.containerOf(ctx);
+      container.read(selectedBookmarkIdProvider.notifier).select('b-edit');
+      // Open the inline-add form so an EditableText (URL field) holds focus.
+      container.read(addFormVisibleProvider.notifier).show();
+      await tester.pumpAndSettle();
+
+      // Precondition: focus is in an EditableText.
+      final focused = FocusManager.instance.primaryFocus;
+      expect(
+        focused?.context?.findAncestorWidgetOfExactType<EditableText>(),
+        isNotNull,
+        reason: 'precondition: URL TextField should hold focus',
+      );
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pumpAndSettle();
+
+      // The inline-add form's own Shift+Enter binding (which submits
+      // the form) wins. AppShell's OpenSelectedBookmark MUST NOT fire.
+      expect(launched, isEmpty,
+          reason: 'AppShell action is suppressed when focus is in a '
+              'TextField — the form-local handler owns the keystroke');
     });
 
     testWidgets('AppDismissIntent: branch 1 -- clears pendingDelete first',

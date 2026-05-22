@@ -430,4 +430,98 @@ void main() {
       expect(plan.bookmarksToDelete, ['b-offline']);
     });
   });
+
+  group(
+      'symmetric tombstone-less heuristic (missing-from-local, present-in-remote)',
+      () {
+    // Scenario: user unlinks the last junction of tag T locally; the
+    // FR16 orphan-sweep deletes T from the local tags table. The
+    // outbox enqueues a tag-delete row. Before the next push, the
+    // orchestrator's debounce fires sync() — pull-first. Remote still
+    // carries T with its pre-deletion updatedAt because no one has
+    // touched it. Without the symmetric heuristic the merge upserts
+    // T back, resurrecting the orphan.
+    test(
+        'remote tag predates lastPulledAt + hasEverSynced=true: skip upsert '
+        '(local deletion sticks)', () {
+      final plan = MergeEngine.merge(
+        local: _localOf(),
+        remote: _remoteOf(
+          lastModifiedMs: 5000,
+          tags: [_dT('t-orphan', updatedAtMs: 1000)],
+        ),
+        hasEverSynced: true,
+        lastPulledAtMs: 3000,
+      );
+      expect(plan.tagsToUpsert, isEmpty,
+          reason: 'remote tag predates our last pull → we already saw '
+              'it and deleted it locally; do not resurrect');
+      expect(plan.tagsToDelete, isEmpty);
+    });
+
+    test(
+        'remote tag postdates lastPulledAt: upsert (genuine new tag from '
+        'another device)', () {
+      final plan = MergeEngine.merge(
+        local: _localOf(),
+        remote: _remoteOf(
+          lastModifiedMs: 5000,
+          tags: [_dT('t-new', updatedAtMs: 4000)],
+        ),
+        hasEverSynced: true,
+        lastPulledAtMs: 3000,
+      );
+      expect(plan.tagsToUpsert.map((t) => t.id), ['t-new'],
+          reason: 'remote tag is newer than our last pull → another '
+              'device created it after our last sync; upsert it');
+    });
+
+    test(
+        'lastPulledAtMs == null (caller forgot to thread it): default to '
+        'upsert (legacy behaviour preserved)', () {
+      final plan = MergeEngine.merge(
+        local: _localOf(),
+        remote: _remoteOf(
+          lastModifiedMs: 5000,
+          tags: [_dT('t-orphan', updatedAtMs: 1000)],
+        ),
+        hasEverSynced: true,
+        // lastPulledAtMs intentionally omitted.
+      );
+      expect(plan.tagsToUpsert.map((t) => t.id), ['t-orphan']);
+    });
+
+    test(
+        'hasEverSynced=false: heuristic does NOT apply (first-sync safety '
+        'still upserts so we don\'t miss inherited remote data)', () {
+      final plan = MergeEngine.merge(
+        local: _localOf(),
+        remote: _remoteOf(
+          lastModifiedMs: 5000,
+          tags: [_dT('t-inherited', updatedAtMs: 1000)],
+        ),
+        hasEverSynced: false,
+        lastPulledAtMs: 3000,
+      );
+      expect(plan.tagsToUpsert.map((t) => t.id), ['t-inherited'],
+          reason: 'fresh install must still pull inherited remote tags');
+    });
+
+    test(
+        'heuristic applies to bookmarks and folders too (same code path '
+        'as tags — record-type-agnostic)', () {
+      final plan = MergeEngine.merge(
+        local: _localOf(),
+        remote: _remoteOf(
+          lastModifiedMs: 5000,
+          bookmarks: [_dB('b-deleted-locally', updatedAtMs: 1000)],
+          folders: [_dF('f-deleted-locally', updatedAtMs: 1000)],
+        ),
+        hasEverSynced: true,
+        lastPulledAtMs: 3000,
+      );
+      expect(plan.bookmarksToUpsert, isEmpty);
+      expect(plan.foldersToUpsert, isEmpty);
+    });
+  });
 }

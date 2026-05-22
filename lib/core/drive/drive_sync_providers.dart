@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../main.dart' show appDatabaseProvider;
 import '../database/sync_queue_repository.dart';
+import 'connectivity_providers.dart';
 import 'drive_auth_providers.dart';
 import 'drive_auth_state.dart';
 import 'drive_credentials_store.dart';
@@ -99,18 +100,31 @@ final hasEverSyncedProvider = StreamProvider<bool>((ref) async* {
   }
 });
 
-/// Side-effect provider that wires three sync trigger events. Story
-/// 4.3 widens this from "auto-push" to "auto-sync": each trigger now
+/// Side-effect provider that wires four sync trigger events. Story
+/// 4.3 widened this from "auto-push" to "auto-sync": each trigger now
 /// invokes `sync()` (pull-then-push), so the orchestrator is the
 /// single dispatch point for the full sync cycle. The provider name
 /// remains `autoPushOrchestratorProvider` to keep the change scoped
 /// (rename touches a lot of test scaffolding) — semantically it is the
 /// auto-sync orchestrator.
 ///
-/// Triggers:
-///   1. Queue non-empty observation (debounced 250ms).
-///   2. Drive transitioned `_ -> connected` (cold start / re-connect).
-///   3. (Story 4.5 will add connectivity-restored as a fourth trigger.)
+/// Triggers (all gated on `DriveAuthConnected`):
+///   1. Queue non-empty observation (debounced 250 ms).
+///   2. Auth state `_ -> connected` (cold start / re-connect).
+///   3. Lifecycle `AppLifecycleState.resumed` (in `_SyncLifecycleObserver`,
+///      `lib/core/widgets/app_shell.dart`).
+///   4. Connectivity `offline -> online` transition (Story 4.5).
+///      Fires `sync()` exactly once per `false -> true` transition.
+///      `true -> true` re-emits (Wi-Fi -> Wi-Fi+Ethernet) and
+///      `true -> false` transitions do NOT fire. No debounce —
+///      `connectivity_plus.onConnectivityChanged` emits at most a
+///      handful of times per minute even on flaky networks; each emit
+///      represents a real OS state change.
+///
+/// Also wires a `connected -> disconnected` auth-state hook (Story
+/// 4.5): on disconnect, calls `DriveSyncService.reset()` to clear
+/// engine in-memory state and `ref.invalidate(hasEverSyncedProvider)`
+/// so the next reconnect starts from a clean amber-then-green baseline.
 ///
 /// Read for side effects from `AppShell.build()` (lib/core/widgets/
 /// app_shell.dart) via `ref.watch(autoPushOrchestratorProvider)`. Scoped
@@ -142,15 +156,44 @@ final autoPushOrchestratorProvider = Provider<void>((ref) {
   ref.listen<AsyncValue<DriveAuthState>>(
     driveAuthStateProvider,
     (prev, next) {
-      next.whenData((state) {
-        if (state is! DriveAuthConnected) return;
+      final prevState = prev?.value;
+      final nextState = next.value;
+      if (nextState is DriveAuthConnected) {
         // On transition into connected (any prior state, including a
         // re-emit of connected from a tab focus restoring the same id),
         // run a full sync cycle. The pull half handles the gate
         // decision (and the FR36 first-launch population path); the
         // push half drains any pre-existing queue rows.
-        ref.read(driveSyncServiceProvider).sync(fileId: state.fileId);
-      });
+        ref.read(driveSyncServiceProvider).sync(fileId: nextState.fileId);
+        return;
+      }
+      // Story 4.5: connected -> disconnected.
+      if (prevState is DriveAuthConnected &&
+          nextState is DriveAuthDisconnected) {
+        // Clear engine in-memory state so the next reconnect doesn't
+        // briefly emit the prior session's SyncSynced as a first event.
+        // Fire-and-forget — disconnect is best-effort cleanup and the
+        // orchestrator can't surface an error meaningfully.
+        unawaited(ref.read(driveSyncServiceProvider).reset());
+        // Re-evaluate the "have we synced this session?" provider so
+        // the next reconnect's indicator starts amber, not green.
+        ref.invalidate(hasEverSyncedProvider);
+      }
+    },
+  );
+
+  ref.listen<AsyncValue<bool>>(
+    connectivityOnlineProvider,
+    (prev, next) {
+      final wasOnline = prev?.value ?? false;
+      final isOnline = next.value ?? false;
+      // Only fire on `offline -> online`. Same-state re-emits
+      // (`true -> true`, e.g. Wi-Fi -> Wi-Fi+Ethernet) and the reverse
+      // direction (`true -> false`) are no-ops.
+      if (wasOnline || !isOnline) return;
+      final auth = ref.read(driveAuthStateProvider).value;
+      if (auth is! DriveAuthConnected) return;
+      ref.read(driveSyncServiceProvider).sync(fileId: auth.fileId);
     },
   );
 

@@ -247,14 +247,25 @@ class DriveSyncService {
       // this, an offline-created local record on a fresh device would
       // be wiped on first sync (we can't distinguish "the other
       // device deleted it" from "we never pushed it").
-      final hasEverSynced =
-          (await _storage.read(key: kDriveLastPulledAtKey)) != null;
+      //
+      // Also capture the timestamp itself (parsed to ms) so the merge
+      // engine's symmetric tombstone-less heuristic can tell whether a
+      // remote record predates our last pull (meaning we already saw
+      // it and deleted it locally — don't resurrect on the next
+      // upsert).
+      final lastPulledAtRaw =
+          await _storage.read(key: kDriveLastPulledAtKey);
+      final hasEverSynced = lastPulledAtRaw != null;
+      final lastPulledAtMs = lastPulledAtRaw == null
+          ? null
+          : DateTime.parse(lastPulledAtRaw).toUtc().millisecondsSinceEpoch;
 
       _emit(const SyncStatus.merging());
 
       final mergeResult = await _mergeApplier.apply(
         remote,
         hasEverSynced: hasEverSynced,
+        lastPulledAtMs: lastPulledAtMs,
       );
       if (mergeResult is Err<void, AppError>) {
         _emit(SyncStatus.failed(mergeResult.error));
@@ -439,6 +450,29 @@ class DriveSyncService {
       return SyncError('Malformed Drive response: ${error.message}');
     }
     return SyncError(error.toString());
+  }
+
+  /// Clears in-memory state without closing the broadcast stream.
+  /// Used by Story 4.5's disconnect flow so a future reconnect starts
+  /// from a clean baseline (no zombie `SyncSynced(at: ...)`).
+  ///
+  /// If a cycle is in-flight, awaits its natural completion before
+  /// emitting `SyncIdle` (so the reset's terminal emit isn't a target
+  /// for a subsequent terminal emit from the in-flight cycle).
+  /// Cancelling mid-flight would require threading a `CancelToken`
+  /// through the engine — out of scope for 4.5; the disconnect path is
+  /// rare and the overlap is bounded by the in-flight HTTP request.
+  ///
+  /// Does NOT close `_statusController` — subscribers stay live across
+  /// disconnect/reconnect cycles. Distinct from [dispose] in that
+  /// regard.
+  Future<void> reset() async {
+    final inFlight = _inFlight;
+    if (inFlight != null) {
+      await inFlight;
+    }
+    _lastSyncedAt = null;
+    _emit(const SyncStatus.idle());
   }
 
   Future<void> dispose() async {

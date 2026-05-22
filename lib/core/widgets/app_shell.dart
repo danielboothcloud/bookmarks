@@ -27,6 +27,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../features/bookmarks/application/bookmark_providers.dart';
 import '../../features/bookmarks/presentation/widgets/bookmark_detail_pane.dart';
+import '../util/url_launcher_service.dart';
 import '../../features/folders/application/folder_providers.dart';
 import '../../features/search/application/search_providers.dart';
 import '../../features/search/presentation/widgets/search_bar.dart';
@@ -85,6 +86,17 @@ class ToggleSelectedFolderIntent extends Intent {
   const ToggleSelectedFolderIntent();
 }
 
+/// Triggered by Shift+Enter at the app-shell level. Opens the currently
+/// selected bookmark in the system browser — same destination the
+/// double-click and the detail pane's Open button hit. No-op when no
+/// bookmark is selected. EditableText guard suppresses the action when
+/// focus is inside a text input so the multi-line notes field continues
+/// to accept newlines and the inline-add form's local Shift+Enter
+/// handler (which saves the form) can win in its own subtree.
+class OpenSelectedBookmarkIntent extends Intent {
+  const OpenSelectedBookmarkIntent();
+}
+
 /// App-level dismiss intent that is NOT Flutter's [DismissIntent]. Scaffold
 /// registers its own `_DismissDrawerAction` for [DismissIntent] which
 /// intercepts the key (even when disabled) and prevents our cascade from
@@ -140,6 +152,44 @@ class _DeleteSelectedItemAction extends Action<DeleteSelectedItemIntent> {
       _ref.read(pendingFolderDeleteIdProvider.notifier).prompt(folderId);
       return null;
     }
+    return null;
+  }
+}
+
+/// AppShell-level handler for Shift+Enter. Opens the currently selected
+/// bookmark in the system browser. Suppressed when focus is inside an
+/// EditableText so:
+///   1. Multi-line notes / search inputs keep their newline behaviour.
+///   2. The inline-add form's local Shift+Enter handler (which submits
+///      the form) wins inside the form's subtree — its `Shortcuts`
+///      binding sits closer in the tree, but the EditableText guard
+///      also protects against AppShell hijacking the keystroke if the
+///      child's binding ever changes.
+class _OpenSelectedBookmarkAction extends Action<OpenSelectedBookmarkIntent> {
+  _OpenSelectedBookmarkAction(this._ref);
+
+  final WidgetRef _ref;
+
+  bool _focusInEditableText() {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return false;
+    return ctx.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  @override
+  bool isEnabled(OpenSelectedBookmarkIntent intent) {
+    if (_focusInEditableText()) return false;
+    return _ref.read(selectedBookmarkProvider) != null;
+  }
+
+  @override
+  Object? invoke(OpenSelectedBookmarkIntent intent) {
+    final bookmark = _ref.read(selectedBookmarkProvider);
+    if (bookmark == null) return null;
+    // Fire-and-forget: launcher returns a Future but we don't await it;
+    // the user's expectation is "browser pops open", not "wait for it
+    // to finish". launcher swallows its own errors via debugPrint.
+    _ref.read(openExternalProvider)(bookmark.url);
     return null;
   }
 }
@@ -322,6 +372,15 @@ class AppShell extends ConsumerWidget {
             ToggleSelectedFolderIntent(),
         SingleActivator(LogicalKeyboardKey.numpadEnter):
             ToggleSelectedFolderIntent(),
+        // Shift+Enter on the currently-selected bookmark opens it in
+        // the system browser. Suppressed inside text fields by the
+        // action's EditableText guard so multi-line inputs keep newline
+        // semantics and the inline-add form's local Shift+Enter (which
+        // submits the form) wins inside the form's subtree.
+        SingleActivator(LogicalKeyboardKey.enter, shift: true):
+            OpenSelectedBookmarkIntent(),
+        SingleActivator(LogicalKeyboardKey.numpadEnter, shift: true):
+            OpenSelectedBookmarkIntent(),
         SingleActivator(LogicalKeyboardKey.escape): AppDismissIntent(),
       },
       child: Actions(
@@ -352,6 +411,7 @@ class AppShell extends ConsumerWidget {
           ExpandOrDescendFolderIntent: _ExpandOrDescendFolderAction(ref),
           CollapseOrAscendFolderIntent: _CollapseOrAscendFolderAction(ref),
           ToggleSelectedFolderIntent: _ToggleSelectedFolderAction(ref),
+          OpenSelectedBookmarkIntent: _OpenSelectedBookmarkAction(ref),
           AppDismissIntent: CallbackAction<AppDismissIntent>(
             onInvoke: (_) {
               // Cascade in priority order: each Esc handles ONE level so

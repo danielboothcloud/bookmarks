@@ -179,29 +179,50 @@ void main() {
 
       await clearSyncQueue();
       await tagRepo.linkBookmarkTag('bm-tag', tag.id);
-      expect(await syncQueueRows(), [
-        {
+      // Two rows are expected, both bookmark-upsert for bm-tag:
+      //   1) bookmark_tags_sync_ai   -> from the junction insert.
+      //   2) bookmarks_sync_au       -> from the updated_at bump that
+      //      linkBookmarkTag now performs so the per-record LWW merge
+      //      keeps the local tag link on the next pull (Story 4.5 smoke
+      //      regression — see tag_repository.dart `_bumpBookmarkUpdatedAt`).
+      // Both reference the same bookmark; the push coalesces them into
+      // a single snapshot.
+      final linkRows = await syncQueueRows();
+      expect(linkRows, hasLength(2));
+      for (final row in linkRows) {
+        expect(row, {
           'operation': 'upsert',
           'entity_type': 'bookmark',
           'entity_id': 'bm-tag',
           'payload': null,
-        },
-      ]);
+        });
+      }
 
       await clearSyncQueue();
       await tagRepo.unlinkBookmarkTag('bm-tag', tag.id);
-      // unlinkBookmarkTag also hard-deletes the orphan tag, so we expect:
+      // unlinkBookmarkTag fires three triggers:
       //   1) bookmark_tags_sync_ad   -> upsert bookmark bm-tag
       //   2) tags_sync_ad            -> delete tag <tag.id>
+      //   3) bookmarks_sync_au       -> upsert bookmark bm-tag (the
+      //      updated_at bump, same rationale as linkBookmarkTag).
       final unlinkRows = await syncQueueRows();
-      expect(unlinkRows, hasLength(2));
-      expect(unlinkRows[0], {
-        'operation': 'upsert',
-        'entity_type': 'bookmark',
-        'entity_id': 'bm-tag',
-        'payload': null,
-      });
-      expect(unlinkRows[1], {
+      expect(unlinkRows, hasLength(3));
+      final upsertRows =
+          unlinkRows.where((r) => r['operation'] == 'upsert').toList();
+      expect(upsertRows, hasLength(2),
+          reason: 'one upsert per bookmark_tags AD + one from the bump');
+      for (final row in upsertRows) {
+        expect(row, {
+          'operation': 'upsert',
+          'entity_type': 'bookmark',
+          'entity_id': 'bm-tag',
+          'payload': null,
+        });
+      }
+      final deleteRows =
+          unlinkRows.where((r) => r['operation'] == 'delete').toList();
+      expect(deleteRows, hasLength(1));
+      expect(deleteRows.single, {
         'operation': 'delete',
         'entity_type': 'tag',
         'entity_id': tag.id,

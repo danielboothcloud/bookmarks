@@ -211,6 +211,212 @@ void main() {
       expect(calls, 0, reason: 'ftp:// must be rejected before any HTTP call');
     });
 
+    test(
+        'all favicon requests carry a Safari-shaped User-Agent (defeats '
+        'default-Dart-UA WAF blocks)', () async {
+      final seenUserAgents = <String>{};
+      final client = MockClient((request) async {
+        seenUserAgents.add(request.headers['user-agent'] ?? '');
+        if (request.url.path == '/favicon.ico') {
+          return http.Response.bytes(_tinyIcoBytes, 200,
+              headers: {'content-type': 'image/x-icon'});
+        }
+        if (request.url.path == '/favicon.svg') {
+          return http.Response('', 404);
+        }
+        if (request.url.path == '/apple-touch-icon.png') {
+          return http.Response('', 404);
+        }
+        return http.Response(_htmlWithTitle('T'), 200,
+            headers: {'content-type': 'text/html'});
+      });
+      final service = MetadataFetchService(client: client);
+
+      await service.fetch('https://example.com');
+
+      expect(seenUserAgents, isNot(contains('')),
+          reason: 'every request must carry a UA header');
+      // Sanity-check the shape (Mozilla prefix + Bookmarks identifier).
+      for (final ua in seenUserAgents) {
+        expect(ua, startsWith('Mozilla/5.0'),
+            reason: 'UA must be browser-shaped to defeat WAFs');
+        expect(ua, contains('Bookmarks/'),
+            reason: 'UA must identify us so server logs can attribute');
+      }
+    });
+
+    test(
+        'HTML-declared favicon (<link rel="icon">) is fetched and preferred '
+        'over the static /favicon.ico fallback', () async {
+      // Site declares a versioned favicon in <head>. The static
+      // /favicon.ico still exists but serves a DIFFERENT image
+      // (sometimes a stale or 1x1 transparent). Declared wins.
+      const declaredBytes = [1, 2, 3, 4, 5, 6, 7, 8];
+      final client = MockClient((request) async {
+        if (request.url.path == '/static/favicon-v3.png') {
+          return http.Response.bytes(declaredBytes, 200,
+              headers: {'content-type': 'image/png'});
+        }
+        if (request.url.path == '/favicon.ico' ||
+            request.url.path == '/favicon.svg' ||
+            request.url.path == '/apple-touch-icon.png') {
+          return http.Response.bytes(_tinyIcoBytes, 200,
+              headers: {'content-type': 'image/x-icon'});
+        }
+        return http.Response(
+          '<!DOCTYPE html><html><head>'
+          '<title>Hello</title>'
+          '<link rel="icon" type="image/png" href="/static/favicon-v3.png">'
+          '</head><body></body></html>',
+          200,
+          headers: {'content-type': 'text/html'},
+        );
+      });
+      final service = MetadataFetchService(client: client);
+
+      final result = await service.fetch('https://example.com');
+
+      expect(result.title, 'Hello');
+      expect(result.faviconBase64, startsWith('data:image/png;base64,'));
+      expect(result.faviconBase64, contains(base64Encode(declaredBytes)),
+          reason: 'declared icon must win over the static fallback');
+    });
+
+    test('<link rel="shortcut icon"> is recognised as a declared icon',
+        () async {
+      // Legacy IE-era declaration; many older sites still use it.
+      const declaredBytes = [9, 9, 9, 9, 9, 9, 9, 9, 9];
+      final client = MockClient((request) async {
+        if (request.url.path == '/legacy-shortcut.ico') {
+          return http.Response.bytes(declaredBytes, 200,
+              headers: {'content-type': 'image/x-icon'});
+        }
+        if (request.url.path == '/favicon.ico' ||
+            request.url.path == '/favicon.svg' ||
+            request.url.path == '/apple-touch-icon.png') {
+          return http.Response('', 404);
+        }
+        return http.Response(
+          '<!DOCTYPE html><html><head>'
+          '<title>T</title>'
+          '<link rel="shortcut icon" href="/legacy-shortcut.ico">'
+          '</head><body></body></html>',
+          200,
+          headers: {'content-type': 'text/html'},
+        );
+      });
+      final service = MetadataFetchService(client: client);
+
+      final result = await service.fetch('https://example.com');
+
+      expect(result.faviconBase64, contains(base64Encode(declaredBytes)));
+    });
+
+    test(
+        'relative href in <link rel="icon"> is resolved against the page URL',
+        () async {
+      const declaredBytes = [7, 7, 7, 7];
+      final client = MockClient((request) async {
+        if (request.url.path == '/blog/icons/favicon.png') {
+          return http.Response.bytes(declaredBytes, 200,
+              headers: {'content-type': 'image/png'});
+        }
+        if (request.url.path == '/favicon.ico' ||
+            request.url.path == '/favicon.svg' ||
+            request.url.path == '/apple-touch-icon.png') {
+          return http.Response('', 404);
+        }
+        return http.Response(
+          '<!DOCTYPE html><html><head>'
+          '<link rel="icon" href="icons/favicon.png">'
+          '</head><body></body></html>',
+          200,
+          headers: {'content-type': 'text/html'},
+        );
+      });
+      final service = MetadataFetchService(client: client);
+
+      final result = await service.fetch('https://example.com/blog/post-1');
+
+      expect(result.faviconBase64, contains(base64Encode(declaredBytes)));
+    });
+
+    test('static /favicon.svg success returns image/svg+xml data URI',
+        () async {
+      const svgBytes = [
+        0x3C, 0x73, 0x76, 0x67, 0x20, 0x78, 0x6D, 0x6C, 0x6E, 0x73,
+        0x3D, 0x22, 0x68, 0x74, 0x74, 0x70, // <svg xmlns="http
+      ];
+      final client = MockClient((request) async {
+        if (request.url.path == '/favicon.ico') {
+          return http.Response('', 404);
+        }
+        if (request.url.path == '/favicon.svg') {
+          return http.Response.bytes(svgBytes, 200,
+              headers: {'content-type': 'image/svg+xml'});
+        }
+        if (request.url.path == '/apple-touch-icon.png') {
+          return http.Response('', 404);
+        }
+        return http.Response(_htmlWithTitle('T'), 200,
+            headers: {'content-type': 'text/html'});
+      });
+      final service = MetadataFetchService(client: client);
+
+      final favicon =
+          (await service.fetch('https://example.com')).faviconBase64;
+      expect(favicon, startsWith('data:image/svg+xml;base64,'));
+    });
+
+    test(
+        'soft-404 returning HTML body at a favicon URL is rejected (no '
+        'content-type, magic-byte sniff catches it)', () async {
+      // Pathological server: returns 200 with the homepage HTML for any
+      // unknown path, no content-type header. Without the HTML
+      // magic-byte sniff, the bytes would be base64-encoded as if they
+      // were a favicon.
+      final client = MockClient((request) async {
+        if (request.url.path == '/' || request.url.path.endsWith('.png') ||
+            request.url.path.endsWith('.ico') ||
+            request.url.path.endsWith('.svg')) {
+          // No content-type header — mimicking the misconfigured-server case.
+          return http.Response(
+            '<!DOCTYPE html><html><head><title>T</title></head>'
+            '<body>soft 404</body></html>',
+            200,
+          );
+        }
+        return http.Response('', 404);
+      });
+      final service = MetadataFetchService(client: client);
+
+      final result = await service.fetch('https://example.com');
+
+      expect(result.faviconBase64, isNull,
+          reason: 'magic-byte HTML sniff must reject the soft-404 body');
+    });
+
+    test(
+        'content-type text/html on /favicon.ico is rejected (explicit '
+        'non-image content-type)', () async {
+      final client = MockClient((request) async {
+        if (request.url.path == '/favicon.ico') {
+          return http.Response('<html>nope</html>', 200,
+              headers: {'content-type': 'text/html'});
+        }
+        if (request.url.path == '/favicon.svg' ||
+            request.url.path == '/apple-touch-icon.png') {
+          return http.Response('', 404);
+        }
+        return http.Response(_htmlWithTitle('T'), 200,
+            headers: {'content-type': 'text/html'});
+      });
+      final service = MetadataFetchService(client: client);
+
+      expect(
+          (await service.fetch('https://example.com')).faviconBase64, isNull);
+    });
+
     test('empty title strings are normalised to null', () async {
       final client = MockClient((request) async {
         if (request.url.path == '/favicon.ico') {

@@ -228,6 +228,62 @@ Reduce-motion: gated on `MediaQuery.disableAnimations`. When true, the dot rende
 
 ---
 
+## Connectivity & disconnect (Story 4.5)
+
+4.5 closes Epic 4. It adds the fourth sync trigger (network-restored), the Settings Disconnect flow, and the engine reset that ties them together. No new schema; no new SyncStatus variants; no new network surface.
+
+### The four triggers
+
+The `autoPushOrchestratorProvider` (`lib/core/drive/drive_sync_providers.dart`) now wires four sync triggers. All four are gated on `DriveAuthConnected`:
+
+1. **Queue non-empty** (250 ms debounce). Fires `sync(fileId)` when the pending count transitions above zero. Source: `syncQueuePendingCountProvider`. Debounced to collapse rapid bursts (5 inserts within 1 s collapse to a single push).
+2. **Auth `_ → connected`**. Fires `sync(fileId)` on the cold-start / reconnect transition. Source: `driveAuthStateProvider`. Also handles re-emits of `connected` from a tab focus / token refresh.
+3. **Lifecycle `AppLifecycleState.resumed`**. Fires `sync(fileId)` when the app foregrounds. Source: `_SyncLifecycleObserver` in `lib/core/widgets/app_shell.dart`. The observer is mounted by AppShell so the trigger is dormant on the /welcome route.
+4. **Connectivity `offline → online`** (Story 4.5). Fires `sync(fileId)` on a `false → true` transition of `connectivityOnlineProvider`. Source: `connectivity_plus.onConnectivityChanged` via `lib/core/drive/connectivity_providers.dart`.
+
+The first three fire on STATE (the orchestrator listens for "queue is non-empty NOW", "auth IS connected NOW"). The fourth fires on TRANSITION — a `true → true` re-emit (e.g. `[wifi] → [wifi, ethernet]` when the user plugs in an ethernet cable on top of an existing Wi-Fi connection) does NOT fire `sync()`. The transition guard lives in the orchestrator listener (`if (wasOnline || !isOnline) return;`), not in `connectivityOnlineProvider` — keeping the provider a pure observation lets multiple consumers compose against it without baking in trigger semantics.
+
+The connectivity trigger does NOT debounce. `connectivity_plus.onConnectivityChanged` emits at most a few times per minute even on flaky networks; each emit represents a real OS state change, and the engine's `_coalesce` (Story 4.3) absorbs any overlap with the other three triggers. A 250 ms debounce would just delay sync without benefit.
+
+### `connectivity_plus` integration boundary
+
+The package is the **wake-up signal**, NOT the **health check**. `connectivity_plus` reports OS-level interface presence (SCNetworkReachability on macOS, NetworkChangeNotifier on Linux, INetworkListManager on Windows), but it does NOT verify actual internet reachability. A captive-portal Wi-Fi (airport, hotel) reports `[ConnectivityResult.wifi]` and 4.5 fires `sync()` — which then `SyncFailed(NetworkError)`s against Drive and the indicator goes grey "Drive unavailable". This is correct: the engine's per-attempt retry IS the health check.
+
+The API shape pinned by v6.1.x: `Connectivity().onConnectivityChanged` is `Stream<List<ConnectivityResult>>` (v5 returned a single `ConnectivityResult`). The mapping to `bool` is `list.any((r) => r != ConnectivityResult.none)`. Doc-cited in `lib/core/drive/connectivity_providers.dart` so a future package upgrade has a test surface to break against.
+
+The `connectivityProvider` wraps the singleton for test override; tests inject a `_FakeConnectivity` with a controllable `StreamController<List<ConnectivityResult>>`.
+
+### The disconnect choreography
+
+`DriveAccountController.disconnect()` (`lib/features/settings/application/drive_account_controller.dart`) is the cross-cutting orchestrator. It runs three steps in order:
+
+1. **Clear the sync queue.** `ref.read(syncQueueRepositoryProvider).clear()` — a single DELETE on `sync_queue`. Local data is unaffected.
+2. **Close the push gate.** `delete(key: kDriveLastPulledAtKey)` on secure storage. The gate stays closed until the next reconnect's pull merges remote data via `MergeApplier`.
+3. **Wipe tokens.** `ref.read(driveAuthStateProvider.notifier).reset()` — clears OAuth keys and flips auth state to `disconnected`.
+
+The `connected → disconnected` auth-state transition trips the orchestrator's auth-state listener (also extended in 4.5), which calls `DriveSyncService.reset()` to clear engine in-memory state (`_lastEmitted = SyncIdle`, `_lastSyncedAt = null`) and `ref.invalidate(hasEverSyncedProvider)` so the next reconnect starts from a clean amber-then-green baseline. The same auth transition also trips GoRouter's `_AuthRefreshNotifier`, which redirects `/settings` → `/welcome` via the existing 4.1 redirect logic (no router change in 4.5).
+
+**Why a separate controller** rather than overloading `DriveAuthNotifier.reset()`: the auth notifier owns auth state (tokens, email, fileId). It does NOT own sync-side state (queue rows, gate timestamp, engine cache). Coupling them via the auth notifier would force the auth subsystem to know about the database; coupling them via the engine would force the engine to know about disconnect semantics. The controller is the right layer for cross-subsystem coordination.
+
+**Why the queue is cleared, but local data isn't**: the queue is sync-side state — pre-disconnect rows are specifically "changes to upload to the (now-being-removed) account". Reconnecting to a *different* Google account would otherwise leak the prior account's queued changes into the new account's `bookmarks.json`. Local Drift data, by contrast, is the user's bookmarks — they exist independently of any Drive account. The next pull's LWW merge naturally re-discovers any unsynced local changes (their `updatedAt` is newer than the remote), so the queue clear is safe.
+
+**Best-effort cleanup.** Each step is wrapped in try/catch with `debugPrint` on failure; subsequent steps run regardless. A macOS Keychain hiccup on the gate-delete must not block the token-wipe step — the user-visible outcome of disconnect must be "Drive is disconnected" even on partial state. Any zombie keys heal on the next reconnect via `DriveAuthService.resolveInitialState()`'s all-or-nothing check.
+
+### Reset vs dispose
+
+`DriveSyncService.reset()` (new in 4.5) is distinct from `dispose()`:
+
+- `reset()` clears in-memory state (`_lastEmitted`, `_lastSyncedAt`); awaits any in-flight cycle's natural completion (we don't have cancellation primitives); emits `SyncStatus.idle()` on the broadcast stream so subscribers see the cleared state. Does NOT close the `_statusController` — subscribers stay live across disconnect/reconnect cycles.
+- `dispose()` (existing) sets `_disposed = true` and closes the broadcast stream. Used only when the `ProviderContainer` is torn down (app shutdown).
+
+A future reconnect re-uses the same `DriveSyncService` instance (the provider is long-lived for the lifetime of the container), which means the broadcast stream's existing subscribers (the indicator, integration tests) continue working without re-subscribing.
+
+### Audit invariant
+
+4.5 adds **one** new external dependency surface — `connectivity_plus` is imported by `lib/` for the first time (the package was a transitive dep since 4.1; `pubspec.yaml:41` line is unchanged). Zero new network destinations, zero new SyncStatus variants, zero new outbox triggers, zero new schema, zero new router routes, zero new polling primitives. The audit greps below continue to return the expected results post-4.5 — verified pre-merge.
+
+---
+
 ## Network destinations
 
 The sync subsystem contacts EXACTLY these endpoints. Anything else is a bug.
@@ -250,8 +306,10 @@ Run before each Epic 4 story merge:
 # NFR9: no telemetry, no analytics, no error reporting SDK.
 grep -ri "(firebase|sentry|crashlytics|mixpanel|amplitude|appcenter|datadog|posthog|segment)" pubspec.yaml lib/ test/
 
-# Sync never polls -- the only triggers are event-based.
-grep -ri "polling\|setInterval\|periodic" lib/core/drive/
+# Sync never polls -- the only four triggers are event-based.
+# Story 4.5 widens the scope to also cover the sync orchestrator wiring,
+# the new connectivity providers, and the disconnect controller.
+grep -ri "polling\|setInterval\|Timer\.periodic" lib/core/drive/ lib/core/widgets/ lib/features/settings/
 
 # All HTTP endpoints in the sync surface should be Drive or token endpoints.
 grep -rn "http\." lib/core/drive/ | grep -v "_test\.dart"
@@ -274,7 +332,9 @@ Expected output: zero matches for the first two; the third should only surface t
 - `lib/core/database/sync_triggers_schema.dart` -- the 11 outbox trigger DDL.
 - `lib/core/database/drift_files/sync_triggers.drift` -- the trigger documentation source-of-truth.
 - `lib/core/drive/drive_credentials_store.dart` -- the auto-refreshing client wrapper.
-- `lib/core/drive/drive_sync_providers.dart` -- Riverpod wiring + the 250ms-debounced auto-push orchestrator.
+- `lib/core/drive/drive_sync_providers.dart` -- Riverpod wiring + the 250ms-debounced auto-push orchestrator + connectivity / disconnect listeners (Story 4.5).
+- `lib/core/drive/connectivity_providers.dart` -- `connectivity_plus` wrapper for the offline → online trigger (Story 4.5).
+- `lib/features/settings/application/drive_account_controller.dart` -- the disconnect choreography (queue clear → gate clear → token wipe) (Story 4.5).
 - `lib/core/widgets/sync_status_indicator.dart` -- the sidebar surface (text + dot at 4.4).
 - `docs/auth-model.md` -- OAuth + credential storage (read first if you're new to this subsystem).
 - `_bmad-output/planning-artifacts/architecture.md` -- the "Sync Architecture" section is the architecture-audience version of this document.

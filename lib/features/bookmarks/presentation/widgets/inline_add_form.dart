@@ -18,6 +18,13 @@ class InlineAddForm extends ConsumerStatefulWidget {
   ConsumerState<InlineAddForm> createState() => _InlineAddFormState();
 }
 
+/// Form-private intent: Shift+Enter from any field commits the form.
+/// Lives at the form's outer Shortcuts scope so URL / title / folder
+/// picker / tags input all hit the same handler.
+class _SubmitInlineFormIntent extends Intent {
+  const _SubmitInlineFormIntent();
+}
+
 class _InlineAddFormState extends ConsumerState<InlineAddForm> {
   final _urlController = TextEditingController();
   final _titleController = TextEditingController();
@@ -121,12 +128,29 @@ class _InlineAddFormState extends ConsumerState<InlineAddForm> {
       child: Shortcuts(
         shortcuts: const <ShortcutActivator, Intent>{
           SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+          // Shift+Enter from ANY field commits the form — faster than
+          // tabbing all the way to the Save button. Bound at the form's
+          // outer scope so it works from URL, title, folder picker, and
+          // tags input alike. Plain Enter retains its per-field meaning
+          // (submit URL/title via onSubmitted; commit tag via comma-or-
+          // Enter idiom).
+          SingleActivator(LogicalKeyboardKey.enter, shift: true):
+              _SubmitInlineFormIntent(),
+          SingleActivator(LogicalKeyboardKey.numpadEnter, shift: true):
+              _SubmitInlineFormIntent(),
         },
         child: Actions(
           actions: <Type, Action<Intent>>{
             DismissIntent: CallbackAction<DismissIntent>(
               onInvoke: (_) {
                 _cancel();
+                return null;
+              },
+            ),
+            _SubmitInlineFormIntent:
+                CallbackAction<_SubmitInlineFormIntent>(
+              onInvoke: (_) {
+                _save();
                 return null;
               },
             ),
