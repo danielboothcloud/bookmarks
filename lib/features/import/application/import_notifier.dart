@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -35,6 +36,9 @@ class ImportNotifier extends AsyncNotifier<ImportState> {
         current is ImportWriting) {
       return;
     }
+
+    // Cancel any in-flight backfill from a prior import (AC7).
+    ref.read(importFaviconBackfillServiceProvider).cancel();
 
     state = const AsyncData(ImportPicking());
     final picker = ref.read(filePickerProvider);
@@ -88,6 +92,13 @@ class ImportNotifier extends AsyncNotifier<ImportState> {
     switch (result) {
       case Ok(:final value):
         state = AsyncData(ImportSucceeded(value));
+        // Fire-and-forget — backfill runs in the background while the
+        // user sees the import summary immediately (AC1, FR33).
+        unawaited(
+          ref
+              .read(importFaviconBackfillServiceProvider)
+              .backfill(value.importedBookmarkIds),
+        );
       case Err():
         state = const AsyncData(
             ImportFailed(ImportFailureReason.storageError));

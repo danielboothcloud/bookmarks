@@ -114,6 +114,7 @@ void main() {
           bookmarksImported: 487,
           itemsSkipped: 3,
           elapsed: Duration(seconds: 2),
+          importedBookmarkIds: <String>[],
         ),
       ),
     );
@@ -137,6 +138,7 @@ void main() {
           bookmarksImported: 20,
           itemsSkipped: 0,
           elapsed: Duration(milliseconds: 80),
+          importedBookmarkIds: <String>[],
         ),
       ),
     );

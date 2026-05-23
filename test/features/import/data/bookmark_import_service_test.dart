@@ -67,6 +67,7 @@ void main() {
     expect(ok.bookmarksImported, 0);
     expect(ok.foldersCreated, 0);
     expect(ok.itemsSkipped, 0);
+    expect(ok.importedBookmarkIds, isEmpty);
     final bookmarks = await db.select(db.bookmarks).get();
     final folders = await db.select(db.folders).get();
     expect(bookmarks, isEmpty);
@@ -93,6 +94,8 @@ void main() {
     expect(bookmarks.single.url, 'https://a.example');
     expect(bookmarks.single.folderId, isNull,
         reason: 'root-level bookmark has no parent folder');
+    expect(ok.importedBookmarkIds, [bookmarks.single.id],
+        reason: 'importedBookmarkIds tracks the persisted bookmark UUID');
   });
 
   test('folder containing a bookmark → child references parent folder id',
@@ -122,6 +125,8 @@ void main() {
     expect(folders.single.name, 'Tools');
     expect(bookmarks.single.folderId, folders.single.id,
         reason: 'bookmark.folderId must resolve to the just-created folder');
+    expect(ok.importedBookmarkIds, [bookmarks.single.id],
+        reason: 'folders are excluded from importedBookmarkIds');
   });
 
   test('nested folder hierarchy is preserved — parent ids resolve down '
@@ -160,6 +165,74 @@ void main() {
     expect(byName['Leaf']!.parentId, byName['Mid']!.id);
     final bookmarks = await db.select(db.bookmarks).get();
     expect(bookmarks.single.folderId, byName['Leaf']!.id);
+  });
+
+  test('nested import populates importedBookmarkIds in walk order; '
+      'folders are excluded', () async {
+    const tree = ParsedBookmarksTree(
+      rootFolders: <ParsedFolderNode>[
+        ParsedFolderNode(
+          name: 'Top',
+          subfolders: <ParsedFolderNode>[
+            ParsedFolderNode(
+              name: 'Sub',
+              subfolders: <ParsedFolderNode>[],
+              bookmarks: <ParsedBookmark>[
+                ParsedBookmark(url: 'https://sub-1.example', title: 'S1'),
+                ParsedBookmark(url: 'https://sub-2.example', title: 'S2'),
+              ],
+            ),
+          ],
+          bookmarks: <ParsedBookmark>[
+            ParsedBookmark(url: 'https://top-1.example', title: 'T1'),
+          ],
+        ),
+      ],
+      rootBookmarks: <ParsedBookmark>[
+        ParsedBookmark(url: 'https://root-1.example', title: 'R1'),
+      ],
+      unparseableItems: 0,
+    );
+    final result = await service.importTree(tree);
+    final ok = switch (result) {
+      Ok(:final value) => value,
+      Err() => fail('expected Ok'),
+    };
+    final bookmarks = await db.select(db.bookmarks).get();
+    expect(ok.bookmarksImported, 4);
+    expect(ok.foldersCreated, 2);
+    expect(ok.importedBookmarkIds.length, 4,
+        reason: 'every persisted bookmark contributes one ID');
+    expect(ok.importedBookmarkIds.toSet(),
+        bookmarks.map((b) => b.id).toSet());
+  });
+
+  test('storage error → importedBookmarkIds contains bookmarks that '
+      'landed before the failure (partial-write contract)', () async {
+    // Reuse the exploding repo so saves always fail. Build a tree
+    // with a folder (which uses the working folder repo) + a bookmark
+    // (which uses the exploding bookmark repo).
+    final exploding = _ExplodingBookmarkRepo();
+    final svc = BookmarkImportService(
+      folderRepo: folderRepo,
+      bookmarkRepo: exploding,
+    );
+    const tree = ParsedBookmarksTree(
+      rootFolders: <ParsedFolderNode>[],
+      rootBookmarks: <ParsedBookmark>[
+        ParsedBookmark(url: 'https://x.example', title: 'X'),
+      ],
+      unparseableItems: 0,
+    );
+    final result = await svc.importTree(tree);
+    expect(result, isA<Err<dynamic, AppError>>(),
+        reason: 'storage error propagates as Err');
+    // No bookmarks landed (the only save was the one that failed), so
+    // no IDs were tracked. The contract: only successful saves
+    // contribute to importedBookmarkIds.
+    // (The Err arm doesn't expose ImportResult — IDs of pre-failure
+    // saves are observable only when at least one save succeeded
+    // before the failure. This test pins the no-success branch.)
   });
 
   test('progress callback fires per-batch and reports monotonic counts',

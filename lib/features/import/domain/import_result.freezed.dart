@@ -14,7 +14,7 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$ImportResult {
 
- int get foldersCreated; int get bookmarksImported; int get itemsSkipped; Duration get elapsed;
+ int get foldersCreated; int get bookmarksImported; int get itemsSkipped; Duration get elapsed; List<String> get importedBookmarkIds;
 /// Create a copy of ImportResult
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -25,16 +25,16 @@ $ImportResultCopyWith<ImportResult> get copyWith => _$ImportResultCopyWithImpl<I
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ImportResult&&(identical(other.foldersCreated, foldersCreated) || other.foldersCreated == foldersCreated)&&(identical(other.bookmarksImported, bookmarksImported) || other.bookmarksImported == bookmarksImported)&&(identical(other.itemsSkipped, itemsSkipped) || other.itemsSkipped == itemsSkipped)&&(identical(other.elapsed, elapsed) || other.elapsed == elapsed));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is ImportResult&&(identical(other.foldersCreated, foldersCreated) || other.foldersCreated == foldersCreated)&&(identical(other.bookmarksImported, bookmarksImported) || other.bookmarksImported == bookmarksImported)&&(identical(other.itemsSkipped, itemsSkipped) || other.itemsSkipped == itemsSkipped)&&(identical(other.elapsed, elapsed) || other.elapsed == elapsed)&&const DeepCollectionEquality().equals(other.importedBookmarkIds, importedBookmarkIds));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,foldersCreated,bookmarksImported,itemsSkipped,elapsed);
+int get hashCode => Object.hash(runtimeType,foldersCreated,bookmarksImported,itemsSkipped,elapsed,const DeepCollectionEquality().hash(importedBookmarkIds));
 
 @override
 String toString() {
-  return 'ImportResult(foldersCreated: $foldersCreated, bookmarksImported: $bookmarksImported, itemsSkipped: $itemsSkipped, elapsed: $elapsed)';
+  return 'ImportResult(foldersCreated: $foldersCreated, bookmarksImported: $bookmarksImported, itemsSkipped: $itemsSkipped, elapsed: $elapsed, importedBookmarkIds: $importedBookmarkIds)';
 }
 
 
@@ -45,7 +45,7 @@ abstract mixin class $ImportResultCopyWith<$Res>  {
   factory $ImportResultCopyWith(ImportResult value, $Res Function(ImportResult) _then) = _$ImportResultCopyWithImpl;
 @useResult
 $Res call({
- int foldersCreated, int bookmarksImported, int itemsSkipped, Duration elapsed
+ int foldersCreated, int bookmarksImported, int itemsSkipped, Duration elapsed, List<String> importedBookmarkIds
 });
 
 
@@ -62,13 +62,14 @@ class _$ImportResultCopyWithImpl<$Res>
 
 /// Create a copy of ImportResult
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? foldersCreated = null,Object? bookmarksImported = null,Object? itemsSkipped = null,Object? elapsed = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? foldersCreated = null,Object? bookmarksImported = null,Object? itemsSkipped = null,Object? elapsed = null,Object? importedBookmarkIds = null,}) {
   return _then(_self.copyWith(
 foldersCreated: null == foldersCreated ? _self.foldersCreated : foldersCreated // ignore: cast_nullable_to_non_nullable
 as int,bookmarksImported: null == bookmarksImported ? _self.bookmarksImported : bookmarksImported // ignore: cast_nullable_to_non_nullable
 as int,itemsSkipped: null == itemsSkipped ? _self.itemsSkipped : itemsSkipped // ignore: cast_nullable_to_non_nullable
 as int,elapsed: null == elapsed ? _self.elapsed : elapsed // ignore: cast_nullable_to_non_nullable
-as Duration,
+as Duration,importedBookmarkIds: null == importedBookmarkIds ? _self.importedBookmarkIds : importedBookmarkIds // ignore: cast_nullable_to_non_nullable
+as List<String>,
   ));
 }
 
@@ -153,10 +154,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int foldersCreated,  int bookmarksImported,  int itemsSkipped,  Duration elapsed)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int foldersCreated,  int bookmarksImported,  int itemsSkipped,  Duration elapsed,  List<String> importedBookmarkIds)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _ImportResult() when $default != null:
-return $default(_that.foldersCreated,_that.bookmarksImported,_that.itemsSkipped,_that.elapsed);case _:
+return $default(_that.foldersCreated,_that.bookmarksImported,_that.itemsSkipped,_that.elapsed,_that.importedBookmarkIds);case _:
   return orElse();
 
 }
@@ -174,10 +175,10 @@ return $default(_that.foldersCreated,_that.bookmarksImported,_that.itemsSkipped,
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int foldersCreated,  int bookmarksImported,  int itemsSkipped,  Duration elapsed)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int foldersCreated,  int bookmarksImported,  int itemsSkipped,  Duration elapsed,  List<String> importedBookmarkIds)  $default,) {final _that = this;
 switch (_that) {
 case _ImportResult():
-return $default(_that.foldersCreated,_that.bookmarksImported,_that.itemsSkipped,_that.elapsed);case _:
+return $default(_that.foldersCreated,_that.bookmarksImported,_that.itemsSkipped,_that.elapsed,_that.importedBookmarkIds);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -194,10 +195,10 @@ return $default(_that.foldersCreated,_that.bookmarksImported,_that.itemsSkipped,
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int foldersCreated,  int bookmarksImported,  int itemsSkipped,  Duration elapsed)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int foldersCreated,  int bookmarksImported,  int itemsSkipped,  Duration elapsed,  List<String> importedBookmarkIds)?  $default,) {final _that = this;
 switch (_that) {
 case _ImportResult() when $default != null:
-return $default(_that.foldersCreated,_that.bookmarksImported,_that.itemsSkipped,_that.elapsed);case _:
+return $default(_that.foldersCreated,_that.bookmarksImported,_that.itemsSkipped,_that.elapsed,_that.importedBookmarkIds);case _:
   return null;
 
 }
@@ -209,13 +210,20 @@ return $default(_that.foldersCreated,_that.bookmarksImported,_that.itemsSkipped,
 
 
 class _ImportResult implements ImportResult {
-  const _ImportResult({required this.foldersCreated, required this.bookmarksImported, required this.itemsSkipped, required this.elapsed});
+  const _ImportResult({required this.foldersCreated, required this.bookmarksImported, required this.itemsSkipped, required this.elapsed, required final  List<String> importedBookmarkIds}): _importedBookmarkIds = importedBookmarkIds;
   
 
 @override final  int foldersCreated;
 @override final  int bookmarksImported;
 @override final  int itemsSkipped;
 @override final  Duration elapsed;
+ final  List<String> _importedBookmarkIds;
+@override List<String> get importedBookmarkIds {
+  if (_importedBookmarkIds is EqualUnmodifiableListView) return _importedBookmarkIds;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(_importedBookmarkIds);
+}
+
 
 /// Create a copy of ImportResult
 /// with the given fields replaced by the non-null parameter values.
@@ -227,16 +235,16 @@ _$ImportResultCopyWith<_ImportResult> get copyWith => __$ImportResultCopyWithImp
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _ImportResult&&(identical(other.foldersCreated, foldersCreated) || other.foldersCreated == foldersCreated)&&(identical(other.bookmarksImported, bookmarksImported) || other.bookmarksImported == bookmarksImported)&&(identical(other.itemsSkipped, itemsSkipped) || other.itemsSkipped == itemsSkipped)&&(identical(other.elapsed, elapsed) || other.elapsed == elapsed));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _ImportResult&&(identical(other.foldersCreated, foldersCreated) || other.foldersCreated == foldersCreated)&&(identical(other.bookmarksImported, bookmarksImported) || other.bookmarksImported == bookmarksImported)&&(identical(other.itemsSkipped, itemsSkipped) || other.itemsSkipped == itemsSkipped)&&(identical(other.elapsed, elapsed) || other.elapsed == elapsed)&&const DeepCollectionEquality().equals(other._importedBookmarkIds, _importedBookmarkIds));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,foldersCreated,bookmarksImported,itemsSkipped,elapsed);
+int get hashCode => Object.hash(runtimeType,foldersCreated,bookmarksImported,itemsSkipped,elapsed,const DeepCollectionEquality().hash(_importedBookmarkIds));
 
 @override
 String toString() {
-  return 'ImportResult(foldersCreated: $foldersCreated, bookmarksImported: $bookmarksImported, itemsSkipped: $itemsSkipped, elapsed: $elapsed)';
+  return 'ImportResult(foldersCreated: $foldersCreated, bookmarksImported: $bookmarksImported, itemsSkipped: $itemsSkipped, elapsed: $elapsed, importedBookmarkIds: $importedBookmarkIds)';
 }
 
 
@@ -247,7 +255,7 @@ abstract mixin class _$ImportResultCopyWith<$Res> implements $ImportResultCopyWi
   factory _$ImportResultCopyWith(_ImportResult value, $Res Function(_ImportResult) _then) = __$ImportResultCopyWithImpl;
 @override @useResult
 $Res call({
- int foldersCreated, int bookmarksImported, int itemsSkipped, Duration elapsed
+ int foldersCreated, int bookmarksImported, int itemsSkipped, Duration elapsed, List<String> importedBookmarkIds
 });
 
 
@@ -264,13 +272,14 @@ class __$ImportResultCopyWithImpl<$Res>
 
 /// Create a copy of ImportResult
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? foldersCreated = null,Object? bookmarksImported = null,Object? itemsSkipped = null,Object? elapsed = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? foldersCreated = null,Object? bookmarksImported = null,Object? itemsSkipped = null,Object? elapsed = null,Object? importedBookmarkIds = null,}) {
   return _then(_ImportResult(
 foldersCreated: null == foldersCreated ? _self.foldersCreated : foldersCreated // ignore: cast_nullable_to_non_nullable
 as int,bookmarksImported: null == bookmarksImported ? _self.bookmarksImported : bookmarksImported // ignore: cast_nullable_to_non_nullable
 as int,itemsSkipped: null == itemsSkipped ? _self.itemsSkipped : itemsSkipped // ignore: cast_nullable_to_non_nullable
 as int,elapsed: null == elapsed ? _self.elapsed : elapsed // ignore: cast_nullable_to_non_nullable
-as Duration,
+as Duration,importedBookmarkIds: null == importedBookmarkIds ? _self._importedBookmarkIds : importedBookmarkIds // ignore: cast_nullable_to_non_nullable
+as List<String>,
   ));
 }
 

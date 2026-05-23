@@ -11,6 +11,9 @@ import 'package:bookmarks/core/drive/drive_file_service.dart'
 import 'package:bookmarks/core/drive/drive_sync_providers.dart';
 import 'package:bookmarks/core/drive/drive_sync_service.dart';
 import 'package:bookmarks/core/drive/sync_status.dart';
+import 'package:bookmarks/features/bookmarks/application/bookmark_providers.dart';
+import 'package:bookmarks/features/bookmarks/data/metadata_fetch_service.dart';
+import 'package:bookmarks/features/bookmarks/domain/url_metadata.dart';
 import 'package:bookmarks/features/import/application/import_providers.dart';
 import 'package:bookmarks/features/import/data/file_picker_wrapper.dart';
 import 'package:bookmarks/features/import/domain/import_failure_reason.dart';
@@ -50,6 +53,34 @@ class _FakeAuthNotifier extends DriveAuthNotifier {
   final DriveAuthState _initial;
   @override
   Future<DriveAuthState> build() async => _initial;
+}
+
+/// Returns `UrlMetadata(null, null)` for every URL — keeps the backfill
+/// running but writing nothing, so existing scenarios assert the
+/// "import lands with null favicons" contract without making live HTTP
+/// requests. Scenario G overrides with a PNG-returning variant.
+class _NullMetadataFetchService implements MetadataFetchService {
+  @override
+  Future<UrlMetadata> fetch(String url) async => const UrlMetadata();
+  @override
+  void close() {}
+}
+
+/// Returns the same fixed PNG payload for every URL — drives the
+/// Scenario G backfill assertion that every imported bookmark
+/// eventually has `faviconBase64 != null`.
+class _FixedPngMetadataFetchService implements MetadataFetchService {
+  static const _pngDataUri =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAA'
+      'C0lEQVR42mNgAAIAAAUAAen63NgAAAAASUVORK5CYII=';
+
+  @override
+  Future<UrlMetadata> fetch(String url) async {
+    return const UrlMetadata(faviconBase64: _pngDataUri);
+  }
+
+  @override
+  void close() {}
 }
 
 /// Minimal copy of the `_FakeDriveServer` from
@@ -120,11 +151,19 @@ ProviderContainer _container({
   _FakeDriveServer? drive,
   _InMemoryStorage? storage,
   DriveAuthState auth = const DriveAuthState.disconnected(),
+  MetadataFetchService? metadataFetchOverride,
 }) {
   final overrides = [
     appDatabaseProvider.overrideWithValue(db),
     filePickerProvider.overrideWithValue(
       FilePickerWrapper.fake(() => pickedPath),
+    ),
+    // Default: a null-returning metadata service so the Story 5.2
+    // backfill fires but writes nothing. Scenario G overrides this
+    // with a fake that returns a real PNG to drive the backfill to
+    // success.
+    metadataFetchServiceProvider.overrideWithValue(
+      metadataFetchOverride ?? _NullMetadataFetchService(),
     ),
     if (drive != null) ...[
       if (storage != null)
@@ -339,6 +378,77 @@ void main() {
         reason: 'queue-debounce must coalesce 500 writes into ≤ 2 pushes');
     expect(drive.uploads.length, greaterThanOrEqualTo(1),
         reason: 'at least one push must have occurred');
+  });
+
+  test('G: background favicon backfill (Story 5.2) — every imported '
+      'bookmark eventually has faviconBase64 != null; sync converges',
+      () async {
+    final storage = _InMemoryStorage()..store;
+    _seedCreds(storage);
+    storage.store[kDriveLastPulledAtKey] =
+        DateTime.utc(2026, 5, 19).toIso8601String();
+    final drive = _FakeDriveServer();
+
+    final container = _container(
+      db: db,
+      pickedPath: 'test/fixtures/chrome_bookmarks.html',
+      drive: drive,
+      storage: storage,
+      auth: const DriveAuthState.connected(
+        email: 'x@y.com',
+        fileId: 'file-1',
+      ),
+      metadataFetchOverride: _FixedPngMetadataFetchService(),
+    );
+    addTearDown(container.dispose);
+
+    container.read(autoPushOrchestratorProvider);
+    container.listen(syncQueuePendingCountProvider, (_, __) {},
+        fireImmediately: true);
+    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, __) {},
+        fireImmediately: true);
+
+    final state = await _runImport(container);
+    expect(state, isA<ImportSucceeded>(),
+        reason: 'import lands ImportSucceeded BEFORE backfill begins (AC1)');
+
+    // Backfill is fire-and-forget; pump real time until every
+    // bookmark has a favicon written. AC2: each save flows through
+    // the Drift stream → the next select sees the monotonically-
+    // growing favicon count.
+    final deadline =
+        DateTime.now().add(const Duration(seconds: 10));
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final rows = await db.select(db.bookmarks).get();
+      if (rows.isNotEmpty && rows.every((b) => b.faviconBase64 != null)) {
+        break;
+      }
+    }
+    final finalRows = await db.select(db.bookmarks).get();
+    expect(finalRows.length, 15,
+        reason: 'all chrome fixture bookmarks were imported');
+    expect(finalRows.every((b) => b.faviconBase64 != null), isTrue,
+        reason: 'AC2 — every imported bookmark gained a favicon via backfill');
+
+    // AC9: the resulting sync queue rows are eventually drained.
+    // Poll for at least one upload landing — the orchestrator's
+    // 250ms debounce coalesces the burst of favicon writes into one
+    // or more push cycles. Don't assert a specific count — Story 4.5
+    // Surprise #5 / 5.2 Dev Notes: timing-dependent → flaky.
+    final uploadDeadline =
+        DateTime.now().add(const Duration(seconds: 10));
+    while (DateTime.now().isBefore(uploadDeadline) &&
+        drive.uploads.isEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    expect(drive.uploads, isNotEmpty,
+        reason: 'AC9 — favicon writes propagated to Drive via the outbox');
+
+    // And the indicator settles back to "Synced" once the queue drains.
+    await _waitForStatus(container, (s) => s is SyncSynced,
+        timeout: const Duration(seconds: 10));
   });
 
   test('F: imported bookmarks are immediately searchable via FTS',

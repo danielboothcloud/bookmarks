@@ -5,6 +5,7 @@ import '../../folders/application/folder_providers.dart';
 import '../data/bookmark_import_service.dart';
 import '../data/browser_bookmarks_html_parser.dart';
 import '../data/file_picker_wrapper.dart';
+import '../data/import_favicon_backfill_service.dart';
 import '../domain/import_state.dart';
 import 'import_notifier.dart';
 
@@ -35,6 +36,19 @@ final bookmarkImportServiceProvider =
 /// `lib/core/drive/drive_auth_providers.dart`.
 final filePickerProvider = Provider<FilePickerWrapper>((_) {
   return FilePickerWrapper.real();
+});
+
+/// Background favicon backfill service (Story 5.2). Wraps the
+/// single-URL `MetadataFetchService` with a bounded worker pool +
+/// cancellation. `ref.read` (not `ref.watch`) on the deps because the
+/// service is one-shot and re-binding on repo identity changes would
+/// invalidate its in-memory cancellation token mid-run.
+final importFaviconBackfillServiceProvider =
+    Provider<ImportFaviconBackfillService>((ref) {
+  return ImportFaviconBackfillService(
+    bookmarkRepo: ref.read(bookmarkRepositoryProvider),
+    metadataFetchService: ref.read(metadataFetchServiceProvider),
+  );
 });
 
 /// State machine driving the Settings → Import section. See

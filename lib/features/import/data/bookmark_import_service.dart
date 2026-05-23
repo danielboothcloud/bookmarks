@@ -73,6 +73,11 @@ class BookmarkImportService {
     var foldersCreated = 0;
     var bookmarksImported = 0;
     var itemsSkipped = tree.unparseableItems;
+    // Story 5.2: collect every bookmark UUID the writer successfully
+    // persists. The notifier hands this list to
+    // `ImportFaviconBackfillService.backfill` after `ImportSucceeded`.
+    // Folders are NOT tracked — they don't have favicons.
+    final importedBookmarkIds = <String>[];
 
     // Empty tree: short-circuit. The notifier upstream interprets an
     // empty tree as an "invalid file" — we still return Ok with zero
@@ -84,6 +89,7 @@ class BookmarkImportService {
         bookmarksImported: 0,
         itemsSkipped: itemsSkipped,
         elapsed: DateTime.now().difference(startedAt),
+        importedBookmarkIds: const <String>[],
       ));
     }
 
@@ -125,6 +131,7 @@ class BookmarkImportService {
         case Ok():
           break;
       }
+      importedBookmarkIds.add(bookmark.id);
       bookmarksImported++;
       itemsWritten++;
       await maybeYield();
@@ -212,6 +219,7 @@ class BookmarkImportService {
       bookmarksImported: bookmarksImported,
       itemsSkipped: itemsSkipped,
       elapsed: DateTime.now().difference(startedAt),
+      importedBookmarkIds: List.unmodifiable(importedBookmarkIds),
     ));
   }
 
