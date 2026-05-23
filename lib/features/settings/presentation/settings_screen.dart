@@ -7,6 +7,7 @@ import '../../../core/drive/drive_auth_state.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../application/drive_account_controller.dart';
+import 'widgets/import_section.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -17,6 +18,7 @@ class SettingsScreen extends StatelessWidget {
       padding: const EdgeInsets.all(AppSpacing.lg),
       children: const [
         _DriveSection(),
+        ImportSection(),
       ],
     );
   }

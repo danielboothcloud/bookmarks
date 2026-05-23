@@ -62,6 +62,9 @@ dependencies:
   # URL launching (open bookmarks in the system default browser, AC4)
   url_launcher: ^6.3.1
 
+  # Native OS file dialog for HTML import. Story 5.1.
+  file_picker: ^8.1.4
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

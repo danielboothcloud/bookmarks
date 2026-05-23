@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Definitely not a bookmark export</title>
+</head>
+<body>
+<h1>This page has prose, lists, and headings but zero DL/DT/A structure.</h1>
+<p>The parser must treat this as "invalid file" — empty tree, zero
+unparseable counter (because there are no DT blocks to attempt at all),
+and the writer surfaces the calm inline message.</p>
+<ul>
+<li>One</li>
+<li>Two</li>
+<li>Three</li>
+</ul>
+</body>
+</html>
