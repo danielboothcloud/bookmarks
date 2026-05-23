@@ -96,21 +96,21 @@ class ImportFaviconBackfillService {
     while (queue.isNotEmpty && identical(_currentRun, runToken)) {
       final id = queue.removeFirst();
 
-      final getResult = await _bookmarkRepo.getById(id);
+      final initialResult = await _bookmarkRepo.getById(id);
       if (!identical(_currentRun, runToken)) return;
-      final current = switch (getResult) {
+      final initial = switch (initialResult) {
         Ok(:final value) => value,
         // Bookmark deleted between import and backfill, or some other
         // storage error — skip silently.
         Err() => null,
       };
-      if (current == null) continue;
-      if (current.faviconBase64 != null) {
+      if (initial == null) continue;
+      if (initial.faviconBase64 != null) {
         // Idempotency: already has a favicon — skip without fetching.
         continue;
       }
 
-      final fetched = await _metadataFetchService.fetch(current.url);
+      final fetched = await _metadataFetchService.fetch(initial.url);
       if (!identical(_currentRun, runToken)) return;
 
       final favicon = fetched.faviconBase64;
@@ -119,15 +119,35 @@ class ImportFaviconBackfillService {
         continue;
       }
 
+      // Re-read immediately before save so a user edit landing during
+      // the (up to 8s) fetch window isn't clobbered by stale state.
+      // The Story 1.4 edit path mutates title / url / notes / folder /
+      // tags through the same repository; using the fresh row as the
+      // copyWith base means our save only touches favicon + updatedAt
+      // (and title in the URL-fallback case).
+      final freshResult = await _bookmarkRepo.getById(id);
+      if (!identical(_currentRun, runToken)) return;
+      final fresh = switch (freshResult) {
+        Ok(:final value) => value,
+        Err() => null,
+      };
+      if (fresh == null) continue;
+      if (fresh.faviconBase64 != null) {
+        // Re-check idempotency on the fresh row: the user may have set
+        // a favicon manually during the fetch window — don't overwrite.
+        continue;
+      }
+
       // Title upgrade — mirror Story 1.3's `_fetchMetadata` heuristic:
       // overwrite the imported title only when it equals the URL
-      // (Story 5.1 AC6 URL-fallback case).
+      // (Story 5.1 AC6 URL-fallback case). Evaluated against the fresh
+      // row so a user-edited title is preserved.
       final fetchedTitle = fetched.title;
-      final nextTitle = (current.title == current.url && fetchedTitle != null)
+      final nextTitle = (fresh.title == fresh.url && fetchedTitle != null)
           ? fetchedTitle
-          : current.title;
+          : fresh.title;
 
-      final updated = current.copyWith(
+      final updated = fresh.copyWith(
         title: nextTitle,
         faviconBase64: favicon,
         updatedAt: _now(),
@@ -141,7 +161,7 @@ class ImportFaviconBackfillService {
         case Err(:final error):
           if (kDebugMode) {
             debugPrint(
-              'ImportFaviconBackfillService: save failed for ${current.id}: '
+              'ImportFaviconBackfillService: save failed for ${fresh.id}: '
               '$error',
             );
           }

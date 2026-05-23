@@ -43,12 +43,19 @@ final filePickerProvider = Provider<FilePickerWrapper>((_) {
 /// cancellation. `ref.read` (not `ref.watch`) on the deps because the
 /// service is one-shot and re-binding on repo identity changes would
 /// invalidate its in-memory cancellation token mid-run.
+///
+/// `onDispose` cancels any in-flight backfill so AC10 ("no save attempt
+/// against a disposed repository") holds when the container tears down
+/// (hot reload, app shutdown, test teardown). Workers see the
+/// cancellation token flip after their next await and return.
 final importFaviconBackfillServiceProvider =
     Provider<ImportFaviconBackfillService>((ref) {
-  return ImportFaviconBackfillService(
+  final service = ImportFaviconBackfillService(
     bookmarkRepo: ref.read(bookmarkRepositoryProvider),
     metadataFetchService: ref.read(metadataFetchServiceProvider),
   );
+  ref.onDispose(service.cancel);
+  return service;
 });
 
 /// State machine driving the Settings → Import section. See
