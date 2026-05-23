@@ -1,4 +1,5 @@
 [tools]
+dagger = "latest"
 flutter = { version = "3.41.9", platforms = { linux-x64 = { url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_{{ version }}-stable.tar.xz" }, macos-arm64 = { url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_{{ version }}-stable.zip" }, macos-x64 = { url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_{{ version }}-stable.zip" }, windows-x64 = { url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_{{ version }}-stable.zip" } }, version_expr = 'fromJSON(body).releases | filter({ #.channel == "stable" }) | map({ replace(#.version, "-stable", "") }) | sortVersions()', version_list_url = "https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json" }
 "gem:cocoapods" = "latest"
 ruby = "3.3"
@@ -39,6 +40,24 @@ fi
 CLIENT_ID=$(jq -r .installed.client_id "$CREDS")
 CLIENT_SECRET=$(jq -r .installed.client_secret "$CREDS")
 flutter build macos --debug \
+  --dart-define=BOOKMARKS_OAUTH_CLIENT_ID="$CLIENT_ID" \
+  --dart-define=BOOKMARKS_OAUTH_CLIENT_SECRET="$CLIENT_SECRET"
+'''
+
+# `mise run build-linux` — debug-shaped local build for smoke runs.
+# Same credential injection as build-macos.
+[tasks.build-linux]
+description = "Build the Linux app (debug) with OAuth creds injected"
+run = '''
+set -e
+CREDS="${BOOKMARKS_CREDS_FILE:-client-creds.json}"
+if [ ! -f "$CREDS" ]; then
+  echo "error: $CREDS not found" >&2
+  exit 1
+fi
+CLIENT_ID=$(jq -r .installed.client_id "$CREDS")
+CLIENT_SECRET=$(jq -r .installed.client_secret "$CREDS")
+flutter build linux --debug \
   --dart-define=BOOKMARKS_OAUTH_CLIENT_ID="$CLIENT_ID" \
   --dart-define=BOOKMARKS_OAUTH_CLIENT_SECRET="$CLIENT_SECRET"
 '''
