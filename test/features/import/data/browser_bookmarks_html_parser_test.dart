@@ -194,5 +194,26 @@ void main() {
       // 1 wrapper "Generated" + 5 top-level + 25 sub = 31 folders.
       expect(folderCount(tree), 31);
     });
+
+    test('folder with empty <H3> is dropped and counted as unparseable',
+        () {
+      const emptyHeader = '''
+<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<DL><p>
+  <DT><H3></H3>
+    <DL><p>
+      <DT><A HREF="https://x.example">Lonely</A>
+    </DL><p>
+  <DT><A HREF="https://y.example">Top-level</A>
+</DL>
+''';
+      final tree = parser.parse(emptyHeader);
+      expect(folderCount(tree), 0,
+          reason: 'empty-named folder must not be persisted');
+      expect(bookmarkCount(tree), 1,
+          reason: 'sibling bookmark survives; folder bookmark is lost '
+              'because its parent was dropped');
+      expect(tree.unparseableItems, 1);
+    });
   });
 }

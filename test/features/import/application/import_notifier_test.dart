@@ -112,15 +112,15 @@ void main() {
     expect(bookmarks.length, 15);
   });
 
-  test('user cancels: idle → picking → failed(userCancelled)', () async {
+  test('user cancels: idle → picking → idle (silent return, AC7)',
+      () async {
     final container = _container(db: db, pickedPath: null);
     addTearDown(container.dispose);
 
     await container.read(importNotifierProvider.notifier).pickAndImport();
     final state = container.read(importNotifierProvider).value;
-    expect(state, isA<ImportFailed>());
-    expect((state! as ImportFailed).reason,
-        ImportFailureReason.userCancelled);
+    expect(state, isA<ImportIdle>(),
+        reason: 'AC7 — cancel returns silently to idle, not failed');
     final bookmarks = await db.select(db.bookmarks).get();
     expect(bookmarks, isEmpty,
         reason: 'cancelled import must not touch the database');

@@ -235,14 +235,14 @@ void main() {
     expect(folders, isEmpty);
   });
 
-  test('C: user cancels file picker — silent return to cancelled state',
+  test('C: user cancels file picker — silent return to idle (AC7)',
       () async {
     final container = _container(db: db, pickedPath: null);
     addTearDown(container.dispose);
 
     final state = await _runImport(container);
-    expect(state, isA<ImportFailed>());
-    expect((state as ImportFailed).reason, ImportFailureReason.userCancelled);
+    expect(state, isA<ImportIdle>(),
+        reason: 'AC7 — cancel returns the section silently to idle');
 
     // Nothing was written; nothing was even attempted.
     final bookmarks = await db.select(db.bookmarks).get();
@@ -264,6 +264,17 @@ void main() {
       if (v is ImportWriting) writingProgress.add(v.progress.itemsWritten);
     });
 
+    // AC4 — observable background streams must keep ticking during the
+    // import (proxy for "the sync indicator continues to update"). The
+    // queue stream is local, doesn't need Drive auth, and is the same
+    // primitive feeding the sync indicator.
+    final queueTicks = <int>[];
+    final queueSub = container
+        .read(syncQueueRepositoryProvider)
+        .watchPendingCount()
+        .listen(queueTicks.add);
+    addTearDown(queueSub.cancel);
+
     final stopwatch = Stopwatch()..start();
     await container.read(importNotifierProvider.notifier).pickAndImport();
     stopwatch.stop();
@@ -274,6 +285,9 @@ void main() {
         reason: 'NFR5 — 500-bookmark import must complete under 5s');
     expect(writingProgress.last, 531,
         reason: '31 folders + 500 bookmarks = 531 total writes');
+    expect(queueTicks.length, greaterThanOrEqualTo(2),
+        reason: 'AC4 — background queue stream must emit during the import, '
+            'proving observable subscribers keep getting updates');
 
     final bookmarks = await db.select(db.bookmarks).get();
     expect(bookmarks.length, 500);

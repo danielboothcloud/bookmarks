@@ -23,8 +23,8 @@ final browserBookmarksHtmlParserProvider =
 final bookmarkImportServiceProvider =
     Provider<BookmarkImportService>((ref) {
   return BookmarkImportService(
-    folderRepo: ref.watch(folderRepositoryProvider),
-    bookmarkRepo: ref.watch(bookmarkRepositoryProvider),
+    folderRepo: ref.read(folderRepositoryProvider),
+    bookmarkRepo: ref.read(bookmarkRepositoryProvider),
   );
 });
 

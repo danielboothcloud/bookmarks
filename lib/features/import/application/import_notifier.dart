@@ -51,8 +51,9 @@ class ImportNotifier extends AsyncNotifier<ImportState> {
       return;
     }
     if (path == null) {
-      state =
-          const AsyncData(ImportFailed(ImportFailureReason.userCancelled));
+      // AC7 / state-machine contract: user cancel is silent — drop
+      // straight back to idle. Not a "failed" terminal state.
+      state = const AsyncData(ImportIdle());
       return;
     }
 
@@ -103,6 +104,14 @@ class ImportNotifier extends AsyncNotifier<ImportState> {
     }
   }
 
+  /// A tree is "empty" when no bookmark exists anywhere in it — root or
+  /// nested. Empty trees are classified as `invalidFile` because a
+  /// browser-exported bookmark file that produces zero bookmarks is
+  /// indistinguishable from a non-bookmark HTML page (or a malformed
+  /// export). A folder-structure-only template (no bookmarks at any
+  /// depth) is therefore deliberately rejected — importing it would
+  /// create empty folders with no user value, and surfacing the calm
+  /// "doesn't appear to be a bookmark export" copy is the correct UX.
   bool _isEmpty(ParsedBookmarksTree tree) {
     if (tree.rootBookmarks.isNotEmpty) return false;
     return tree.rootFolders.every(_folderEmpty);

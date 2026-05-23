@@ -168,11 +168,12 @@ void main() {
         reason: 'button remains enabled so user can pick a different file');
   });
 
-  testWidgets('failed(userCancelled): silent — renders the idle body',
+  testWidgets('idle after cancel: no error surface, no failed copy',
       (tester) async {
-    final container = _container(
-      initial: const ImportFailed(ImportFailureReason.userCancelled),
-    );
+    // Post-cancel the notifier transitions straight back to ImportIdle
+    // (AC7). The widget must render the calm idle body without
+    // surfacing any "doesn't appear" / "couldn't save" copy.
+    final container = _container(initial: const ImportIdle());
     addTearDown(container.dispose);
 
     await tester.pumpWidget(_wrap(container));
@@ -180,8 +181,9 @@ void main() {
 
     expect(find.text('Import from a browser bookmark export (HTML file).'),
         findsOneWidget,
-        reason: 'cancel renders idle copy — no error surface');
+        reason: 'cancel returns to idle — no error surface');
     expect(find.textContaining("doesn't appear"), findsNothing);
+    expect(find.textContaining("Couldn't save"), findsNothing);
   });
 
   testWidgets('failed(storageError): renders muted retry copy + button',

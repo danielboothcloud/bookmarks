@@ -11,8 +11,9 @@ import '../../../import/domain/import_state.dart';
 /// [ImportState] to render the correct subtree.
 ///
 /// Visual / interaction rules:
-///   * Idle / cancelled-failed / invalid-file-failed: title + body +
-///     `FilledButton("Import from HTML file")`.
+///   * Idle / invalid-file-failed / storage-error-failed: title + body +
+///     `FilledButton("Import from HTML file")`. (User cancel returns
+///     straight to ImportIdle — no failed state recorded; see AC7.)
 ///   * Picking / writing / parsing: button hidden, progress text +
 ///     `LinearProgressIndicator` visible while writing.
 ///   * Succeeded: muted summary + a small "Import another file"
@@ -115,7 +116,7 @@ class _ImportBody extends ConsumerWidget {
         );
 
       case ImportFailed(:final reason):
-        return _FailedBody(reason: reason, mutedStyle: muted, ref: ref);
+        return _FailedBody(reason: reason, mutedStyle: muted);
     }
   }
 }
@@ -173,34 +174,18 @@ class _WritingBody extends StatelessWidget {
   }
 }
 
-class _FailedBody extends StatelessWidget {
+class _FailedBody extends ConsumerWidget {
   const _FailedBody({
     required this.reason,
     required this.mutedStyle,
-    required this.ref,
   });
 
   final ImportFailureReason reason;
   final TextStyle? mutedStyle;
-  final WidgetRef ref;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     switch (reason) {
-      case ImportFailureReason.userCancelled:
-        // Silent return. The notifier transitions to failed
-        // (cancelled) so the state machine has a terminal record;
-        // the UI just renders the idle body so the user sees no
-        // surfaced error. Calm-utility rule from cumulative feedback
-        // patterns.
-        return _IdleBody(
-          subtitle:
-              'Import from a browser bookmark export (HTML file).',
-          mutedStyle: mutedStyle,
-          onPressed: () =>
-              ref.read(importNotifierProvider.notifier).pickAndImport(),
-        );
-
       case ImportFailureReason.invalidFile:
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,

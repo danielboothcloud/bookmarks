@@ -84,6 +84,14 @@ class BrowserBookmarksHtmlParser {
       final header = _firstChild(dt, 'h3');
 
       if (header != null) {
+        // Defensive: `<DT><H3></H3>…</DT>` would otherwise create an
+        // unnamed folder. Real exports always have a name; skip and
+        // count.
+        final name = header.text.trim();
+        if (name.isEmpty) {
+          unparseable.value++;
+          continue;
+        }
         // Folder. The nested <DL> location varies by browser export
         // shape AND by html5 parser quirks:
         //   * Chrome / Safari: <DL> is a direct child of <DT>.
@@ -105,7 +113,7 @@ class BrowserBookmarksHtmlParser {
           bms = const <ParsedBookmark>[];
         }
         folders.add(ParsedFolderNode(
-          name: header.text.trim(),
+          name: name,
           subfolders: subfolders,
           bookmarks: bms,
         ));
