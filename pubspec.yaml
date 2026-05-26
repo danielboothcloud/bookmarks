@@ -65,6 +65,9 @@ dependencies:
   # Native OS file dialog for HTML import. Story 5.1.
   file_picker: ^8.1.4
 
+  # App version display in Settings.
+  package_info_plus: ^8.1.2
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

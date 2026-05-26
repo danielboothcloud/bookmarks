@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../../core/drive/drive_auth_providers.dart';
 import '../../../core/drive/drive_auth_state.dart';
@@ -19,7 +20,33 @@ class SettingsScreen extends StatelessWidget {
       children: const [
         _DriveSection(),
         ImportSection(),
+        _VersionFooter(),
       ],
+    );
+  }
+}
+
+class _VersionFooter extends StatelessWidget {
+  const _VersionFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<PackageInfo>(
+      future: PackageInfo.fromPlatform(),
+      builder: (context, snapshot) {
+        final version = snapshot.data?.version;
+        return Padding(
+          padding: const EdgeInsets.only(top: AppSpacing.lg),
+          child: Center(
+            child: Text(
+              version == null ? '' : 'v$version',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppColors.textMuted,
+                  ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
