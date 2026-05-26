@@ -26,18 +26,6 @@ jobs:
       - name: Install 1Password CLI
         uses: 1password/install-cli-action@v1
 
-      # The cloud token is the one secret we do need at the workflow
-      # level: dagger-for-github's `cloud-token` input expects a
-      # literal string. The token is build-observability, not user
-      # data — accepted exposure per the tech-spec.
-      - name: Load Dagger Cloud token
-        uses: 1password/load-secrets-action@v2
-        with:
-          export-env: true
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          DAGGER_CLOUD_TOKEN: op://homelab/bookmarks/dagger_cloud_token
-
       # ---- Linux suite ----
 
       - name: Codegen drift check
@@ -46,7 +34,6 @@ jobs:
         with:
           verb: call
           args: codegen-check --source=.
-          cloud-token: ${{ env.DAGGER_CLOUD_TOKEN }}
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
 
@@ -56,7 +43,6 @@ jobs:
         with:
           verb: call
           args: analyze --source=.
-          cloud-token: ${{ env.DAGGER_CLOUD_TOKEN }}
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
 
@@ -70,7 +56,6 @@ jobs:
             --source=.
             --oauth-client-id=op://homelab/bookmarks/oauth_client_id
             --oauth-client-secret=op://homelab/bookmarks/oauth_client_secret
-          cloud-token: ${{ env.DAGGER_CLOUD_TOKEN }}
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
 
@@ -86,7 +71,6 @@ jobs:
             --oauth-client-secret=op://homelab/bookmarks/oauth_client_secret
             export
             --path=./build-linux-output
-          cloud-token: ${{ env.DAGGER_CLOUD_TOKEN }}
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
 
@@ -112,7 +96,6 @@ jobs:
             --oauth-client-secret=op://homelab/bookmarks/oauth_client_secret
             export
             --path=./build-windows-output
-          cloud-token: ${{ env.DAGGER_CLOUD_TOKEN }}
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
 
