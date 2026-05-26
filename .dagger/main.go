@@ -6,6 +6,12 @@
 // Flutter is pinned to 3.41.9 to match mise.toml. OAuth secrets flow
 // through Dagger's Secret API and are surfaced into the Flutter
 // toolchain via `--dart-define`, the same contract as the mise tasks.
+//
+// Every function takes the same `+ignore=[...]` list on its `source`
+// parameter. The list excludes local build outputs, gitignored
+// secrets, planning artifacts, and tool caches — none of which the
+// pipeline needs and all of which would balloon the host->container
+// filesync. Keep the lists identical across functions.
 
 package main
 
@@ -34,6 +40,12 @@ func (m *Bookmarks) linuxBase() *dagger.Container {
 		From(linuxBaseImage).
 		WithEnvVariable("HOME", "/root").
 		WithEnvVariable("PUB_CACHE", pubCachePath).
+		// Dagger runs the container in a user-namespaced sandbox
+		// where chown to arbitrary uids is denied. Flutter's gradle
+		// wrapper tarball has non-root ownership baked in, so tar
+		// fails. TAR_OPTIONS is honoured by GNU tar globally — every
+		// tar invocation in this layer will skip chown.
+		WithEnvVariable("TAR_OPTIONS", "--no-same-owner").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{
 			"apt-get", "install", "-y", "--no-install-recommends",
@@ -75,7 +87,21 @@ func (m *Bookmarks) flutterLinuxBase() *dagger.Container {
 		// `flutter --version` doubles as a smoke test (the layer fails
 		// fast if the install is broken) and pre-downloads the Dart
 		// engine so later steps don't pay that cost.
-		WithExec([]string{"flutter", "--version"})
+		WithExec([]string{"flutter", "--version"}).
+		// Disable every target except Linux desktop. Android in
+		// particular triggers a gradle-wrapper download whose tarball
+		// has non-root ownership baked in — tar then fails to chown
+		// inside Dagger's user-namespaced container.
+		WithExec([]string{
+			"flutter", "config",
+			"--no-enable-android",
+			"--no-enable-ios",
+			"--no-enable-web",
+			"--no-enable-fuchsia",
+			"--no-enable-macos-desktop",
+			"--no-enable-windows-desktop",
+			"--enable-linux-desktop",
+		})
 }
 
 // withSource attaches the persistent pub cache, mounts pubspec files
@@ -104,7 +130,11 @@ func (m *Bookmarks) withSource(c *dagger.Container, source *dagger.Directory) *d
 // tree so callers may inspect any generated file; this means
 // `export --path=.` will overwrite the host source tree (intended for
 // the regeneration workflow — see README).
-func (m *Bookmarks) Codegen(ctx context.Context, source *dagger.Directory) (*dagger.Directory, error) {
+func (m *Bookmarks) Codegen(
+	ctx context.Context,
+	// +ignore=[".git", ".dart_tool", "build", "coverage", "linux/flutter/ephemeral", "windows/flutter/ephemeral", "macos/Flutter/ephemeral", "macos/Pods", "ios/Pods", ".dagger", "dagger.json", "client-creds.json", "_bmad", "_bmad-output", ".idea", ".opencode", ".claude", "*.log"]
+	source *dagger.Directory,
+) (*dagger.Directory, error) {
 	c, err := m.withSource(m.flutterLinuxBase(), source).
 		WithExec([]string{"dart", "run", "build_runner", "build", "--delete-conflicting-outputs"}).
 		Sync(ctx)
@@ -121,9 +151,12 @@ func (m *Bookmarks) Codegen(ctx context.Context, source *dagger.Directory) (*dag
 //
 // We can't use `git diff` because the mounted source has no `.git`.
 // Instead we snapshot the generated trees before regeneration, then
-// `diff -r` against them after. `find ... -delete` errors loudly if
-// any tracked file went missing.
-func (m *Bookmarks) CodegenCheck(ctx context.Context, source *dagger.Directory) (string, error) {
+// `diff -r` against them after.
+func (m *Bookmarks) CodegenCheck(
+	ctx context.Context,
+	// +ignore=[".git", ".dart_tool", "build", "coverage", "linux/flutter/ephemeral", "windows/flutter/ephemeral", "macos/Flutter/ephemeral", "macos/Pods", "ios/Pods", ".dagger", "dagger.json", "client-creds.json", "_bmad", "_bmad-output", ".idea", ".opencode", ".claude", "*.log"]
+	source *dagger.Directory,
+) (string, error) {
 	const snapshotAndDiff = `set -e
 mkdir -p /baseline/lib /baseline/test
 cp -r /src/lib /baseline/lib-snapshot
@@ -146,7 +179,11 @@ echo "codegen clean"
 
 // Analyze runs `flutter analyze` with infos and warnings promoted to
 // fatal, matching the strictness expected of a production CI gate.
-func (m *Bookmarks) Analyze(ctx context.Context, source *dagger.Directory) (string, error) {
+func (m *Bookmarks) Analyze(
+	ctx context.Context,
+	// +ignore=[".git", ".dart_tool", "build", "coverage", "linux/flutter/ephemeral", "windows/flutter/ephemeral", "macos/Flutter/ephemeral", "macos/Pods", "ios/Pods", ".dagger", "dagger.json", "client-creds.json", "_bmad", "_bmad-output", ".idea", ".opencode", ".claude", "*.log"]
+	source *dagger.Directory,
+) (string, error) {
 	return m.withSource(m.flutterLinuxBase(), source).
 		WithExec([]string{"flutter", "analyze", "--fatal-infos", "--fatal-warnings"}).
 		Stdout(ctx)
@@ -160,6 +197,7 @@ func (m *Bookmarks) Analyze(ctx context.Context, source *dagger.Directory) (stri
 // secrets are attached or not.
 func (m *Bookmarks) Test(
 	ctx context.Context,
+	// +ignore=[".git", ".dart_tool", "build", "coverage", "linux/flutter/ephemeral", "windows/flutter/ephemeral", "macos/Flutter/ephemeral", "macos/Pods", "ios/Pods", ".dagger", "dagger.json", "client-creds.json", "_bmad", "_bmad-output", ".idea", ".opencode", ".claude", "*.log"]
 	source *dagger.Directory,
 	// +optional
 	oauthClientId *dagger.Secret,
@@ -183,6 +221,7 @@ func (m *Bookmarks) Test(
 // artifact upload.
 func (m *Bookmarks) BuildLinux(
 	ctx context.Context,
+	// +ignore=[".git", ".dart_tool", "build", "coverage", "linux/flutter/ephemeral", "windows/flutter/ephemeral", "macos/Flutter/ephemeral", "macos/Pods", "ios/Pods", ".dagger", "dagger.json", "client-creds.json", "_bmad", "_bmad-output", ".idea", ".opencode", ".claude", "*.log"]
 	source *dagger.Directory,
 	// +optional
 	oauthClientId *dagger.Secret,
@@ -249,7 +288,20 @@ func (m *Bookmarks) flutterWindowsBase() *dagger.Container {
 			`C:\flutter\bin;${PATH}`,
 			dagger.ContainerWithEnvVariableOpts{Expand: true},
 		).
-		WithExec([]string{"powershell", "-NoProfile", "-Command", "flutter --version"})
+		WithExec([]string{"powershell", "-NoProfile", "-Command", "flutter --version"}).
+		// Same target-pruning as the Linux base — only enable the
+		// platform we actually build for in this container.
+		WithExec([]string{
+			"powershell", "-NoProfile", "-Command",
+			"flutter config " +
+				"--no-enable-android " +
+				"--no-enable-ios " +
+				"--no-enable-web " +
+				"--no-enable-fuchsia " +
+				"--no-enable-linux-desktop " +
+				"--no-enable-macos-desktop " +
+				"--enable-windows-desktop",
+		})
 }
 
 // BuildWindows produces a release Flutter Windows desktop bundle.
@@ -262,6 +314,7 @@ func (m *Bookmarks) flutterWindowsBase() *dagger.Container {
 // mount. The non-mount path sidesteps the restriction.
 func (m *Bookmarks) BuildWindows(
 	ctx context.Context,
+	// +ignore=[".git", ".dart_tool", "build", "coverage", "linux/flutter/ephemeral", "windows/flutter/ephemeral", "macos/Flutter/ephemeral", "macos/Pods", "ios/Pods", ".dagger", "dagger.json", "client-creds.json", "_bmad", "_bmad-output", ".idea", ".opencode", ".claude", "*.log"]
 	source *dagger.Directory,
 	// +optional
 	oauthClientId *dagger.Secret,

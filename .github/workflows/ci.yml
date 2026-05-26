@@ -19,13 +19,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Install the 1Password CLI so Dagger's built-in op:// secret
-      # provider can resolve references directly. OAuth values are
-      # never written to $GITHUB_ENV — they live only inside Dagger's
-      # Secret abstraction once resolved.
-      - name: Install 1Password CLI
-        uses: 1password/install-cli-action@v1
-
       # ---- Linux suite ----
 
       - name: Codegen drift check
@@ -34,8 +27,6 @@ jobs:
         with:
           verb: call
           args: codegen-check --source=.
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
 
       - name: Analyze
         if: matrix.os == 'ubuntu-latest'
@@ -43,36 +34,20 @@ jobs:
         with:
           verb: call
           args: analyze --source=.
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
 
       - name: Test
         if: matrix.os == 'ubuntu-latest'
         uses: dagger/dagger-for-github@v8.4.1
         with:
           verb: call
-          args: >-
-            test
-            --source=.
-            --oauth-client-id=op://homelab/bookmarks/oauth_client_id
-            --oauth-client-secret=op://homelab/bookmarks/oauth_client_secret
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          args: test --source=.
 
       - name: Build Linux
         if: matrix.os == 'ubuntu-latest'
         uses: dagger/dagger-for-github@v8.4.1
         with:
           verb: call
-          args: >-
-            build-linux
-            --source=.
-            --oauth-client-id=op://homelab/bookmarks/oauth_client_id
-            --oauth-client-secret=op://homelab/bookmarks/oauth_client_secret
-            export
-            --path=./build-linux-output
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          args: build-linux --source=. export --path=./build-linux-output
 
       - name: Upload Linux artifact
         if: matrix.os == 'ubuntu-latest'
@@ -89,15 +64,7 @@ jobs:
         uses: dagger/dagger-for-github@v8.4.1
         with:
           verb: call
-          args: >-
-            build-windows
-            --source=.
-            --oauth-client-id=op://homelab/bookmarks/oauth_client_id
-            --oauth-client-secret=op://homelab/bookmarks/oauth_client_secret
-            export
-            --path=./build-windows-output
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          args: build-windows --source=. export --path=./build-windows-output
 
       - name: Upload Windows artifact
         if: matrix.os == 'windows-latest'
