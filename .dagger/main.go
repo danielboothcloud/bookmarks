@@ -63,6 +63,10 @@ func (m *Bookmarks) linuxBase() *dagger.Container {
 			"liblzma-dev",
 			"libstdc++-12-dev",
 			"ca-certificates",
+			// flutter_secure_storage_linux deps — libsecret backs the
+			// keyring API, jsoncpp parses the secret payloads.
+			"libsecret-1-dev",
+			"libjsoncpp-dev",
 		})
 }
 
