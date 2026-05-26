@@ -143,7 +143,7 @@ void main() {
     container.read(syncQueuePendingCountProvider);
 
     await db.customStatement(
-      "INSERT INTO sync_queue (operation, entity_type, entity_id, payload, "
+      'INSERT INTO sync_queue (operation, entity_type, entity_id, payload, '
       "created_at) VALUES ('upsert', 'bookmark', 'b1', NULL, 1)",
     );
 
@@ -166,7 +166,7 @@ void main() {
     container.read(syncQueuePendingCountProvider);
 
     await db.customStatement(
-      "INSERT INTO sync_queue (operation, entity_type, entity_id, payload, "
+      'INSERT INTO sync_queue (operation, entity_type, entity_id, payload, '
       "created_at) VALUES ('upsert', 'bookmark', 'b1', NULL, 1)",
     );
 
@@ -215,7 +215,7 @@ void main() {
 
     for (var i = 0; i < 5; i++) {
       await db.customStatement(
-        "INSERT INTO sync_queue (operation, entity_type, entity_id, payload, "
+        'INSERT INTO sync_queue (operation, entity_type, entity_id, payload, '
         "created_at) VALUES ('upsert', 'bookmark', ?, NULL, 1)",
         ['b$i'],
       );
@@ -256,7 +256,7 @@ void main() {
     // Keep the StreamProvider alive so its async* loop runs.
     container.listen<AsyncValue<bool>>(
       connectivityOnlineProvider,
-      (_, __) {},
+      (_, _) {},
       fireImmediately: true,
     );
 
@@ -292,7 +292,7 @@ void main() {
     container.read(autoPushOrchestratorProvider);
     container.listen<AsyncValue<bool>>(
       connectivityOnlineProvider,
-      (_, __) {},
+      (_, _) {},
       fireImmediately: true,
     );
 
@@ -327,7 +327,7 @@ void main() {
     container.read(autoPushOrchestratorProvider);
     container.listen<AsyncValue<bool>>(
       connectivityOnlineProvider,
-      (_, __) {},
+      (_, _) {},
       fireImmediately: true,
     );
 
@@ -359,7 +359,7 @@ void main() {
     container.read(autoPushOrchestratorProvider);
     container.listen<AsyncValue<bool>>(
       connectivityOnlineProvider,
-      (_, __) {},
+      (_, _) {},
       fireImmediately: true,
     );
 

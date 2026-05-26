@@ -161,7 +161,7 @@ void main() {
     final row = await db
         .customSelect(
           'SELECT updated_at FROM bookmarks WHERE id = ?',
-          variables: [Variable<String>('b1')],
+          variables: [const Variable<String>('b1')],
         )
         .getSingle();
     expect(row.read<int>('updated_at'), greaterThan(oldStamp),
@@ -198,7 +198,7 @@ void main() {
     final row = await db
         .customSelect(
           'SELECT updated_at FROM bookmarks WHERE id = ?',
-          variables: [Variable<String>('b1')],
+          variables: [const Variable<String>('b1')],
         )
         .getSingle();
     expect(row.read<int>('updated_at'), greaterThan(oldStamp),

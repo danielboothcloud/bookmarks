@@ -20,7 +20,7 @@ void main() {
       late http.Request lastList;
       final client = MockClient((req) async {
         if (req.url.path.endsWith('/files') && req.method == 'GET') {
-          lastList = req as http.Request;
+          lastList = req;
           return http.Response(
             jsonEncode({
               'files': [
@@ -78,7 +78,7 @@ void main() {
       final client = MockClient((req) async {
         if (req.method == 'GET') {
           listCount++;
-          return http.Response(jsonEncode({'files': []}), 200,
+          return http.Response(jsonEncode({'files': <Object>[]}), 200,
               headers: {'content-type': 'application/json'});
         }
         if (req.method == 'POST') {
@@ -140,7 +140,7 @@ void main() {
         headersSeen.add(req.headers['Authorization']);
         if (req.method == 'GET') {
           return http.Response(
-            jsonEncode({'files': []}),
+            jsonEncode({'files': <Object>[]}),
             200,
             headers: {'content-type': 'application/json'},
           );
@@ -218,7 +218,7 @@ void main() {
       final client = MockClient((req) async {
         if (req.method == 'GET') {
           return http.Response(
-            jsonEncode({'files': []}),
+            jsonEncode({'files': <Object>[]}),
             200,
             headers: {'content-type': 'application/json'},
           );

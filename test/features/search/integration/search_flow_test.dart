@@ -358,7 +358,9 @@ void main() {
         }
         final children = span.children;
         if (children != null) {
-          for (final c in children) walk(c);
+          for (final c in children) {
+            walk(c);
+          }
         }
       }
     }

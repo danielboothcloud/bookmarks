@@ -306,10 +306,10 @@ void main() {
 
     container.read(autoPushOrchestratorProvider);
     container.listen<AsyncValue<bool>>(
-        connectivityOnlineProvider, (_, __) {},
+        connectivityOnlineProvider, (_, _) {},
         fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncQueuePendingCountProvider, (_, __) {},
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {},
         fireImmediately: true);
 
     // Queue write → orchestrator debounce → sync() → push fails (offline)
@@ -353,9 +353,9 @@ void main() {
 
     container.read(autoPushOrchestratorProvider);
     container.listen<AsyncValue<bool>>(
-        connectivityOnlineProvider, (_, __) {},
+        connectivityOnlineProvider, (_, _) {},
         fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
 
     // Settle initial auth-state sync.
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -390,9 +390,9 @@ void main() {
 
     container.read(autoPushOrchestratorProvider);
     container.listen<AsyncValue<bool>>(
-        connectivityOnlineProvider, (_, __) {},
+        connectivityOnlineProvider, (_, _) {},
         fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
 
     await Future<void>.delayed(const Duration(milliseconds: 50));
     final svc = container.read(driveSyncServiceProvider)
@@ -423,7 +423,7 @@ void main() {
 
     container.read(autoPushOrchestratorProvider);
     container.listen<AsyncValue<bool>>(
-        connectivityOnlineProvider, (_, __) {},
+        connectivityOnlineProvider, (_, _) {},
         fireImmediately: true);
 
     await Future<void>.delayed(const Duration(milliseconds: 30));
@@ -457,10 +457,10 @@ void main() {
 
     container.read(autoPushOrchestratorProvider);
     container.listen<AsyncValue<bool>>(
-        connectivityOnlineProvider, (_, __) {},
+        connectivityOnlineProvider, (_, _) {},
         fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncQueuePendingCountProvider, (_, __) {},
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {},
         fireImmediately: true);
 
     // Settle initial auth-state sync first.

@@ -246,9 +246,9 @@ void main() {
     // listen keeps the StreamProviders subscribed for the test's
     // lifetime; container.read alone does not guarantee the
     // subscription stays open between reads.
-    container.listen(syncQueuePendingCountProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(hasEverSyncedProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, _) {}, fireImmediately: true);
 
     // Insert a bookmark — the outbox trigger enqueues a row; the
     // orchestrator's 250ms debounce fires sync(); the engine pushes
@@ -287,9 +287,9 @@ void main() {
     // listen keeps the StreamProviders subscribed for the test's
     // lifetime; container.read alone does not guarantee the
     // subscription stays open between reads.
-    container.listen(syncQueuePendingCountProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(hasEverSyncedProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, _) {}, fireImmediately: true);
 
     drive.setOnline(false);
 
@@ -346,9 +346,9 @@ void main() {
 
     // Prime the providers but DON'T start the orchestrator yet — we
     // want to inspect the pre-sync state.
-    container.listen(syncQueuePendingCountProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(hasEverSyncedProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, _) {}, fireImmediately: true);
     // Let the StreamProvider yield its initial `false`.
     await Future<void>.delayed(Duration.zero);
 
@@ -396,9 +396,9 @@ void main() {
     // initial container construction is not enough — the engine starts
     // at idle). We simulate the prior-session-synced setup by writing
     // the cursor and gating on it manually.
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncQueuePendingCountProvider, (_, __) {}, fireImmediately: true);
-    container.listen(hasEverSyncedProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, _) {}, fireImmediately: true);
     await Future<void>.delayed(Duration.zero);
     expect(container.read(hasEverSyncedProvider).value ?? false, isFalse);
 
@@ -438,9 +438,9 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    container.listen(syncQueuePendingCountProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(hasEverSyncedProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, _) {}, fireImmediately: true);
 
     drive.setOnline(false);
 
@@ -510,9 +510,9 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    container.listen(syncQueuePendingCountProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(hasEverSyncedProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, _) {}, fireImmediately: true);
 
     // Direct sync call: no credentials → AuthError on the first
     // `authenticatedClient` read inside `pull`/`push`. We do not need

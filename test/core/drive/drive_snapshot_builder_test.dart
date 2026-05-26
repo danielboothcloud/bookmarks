@@ -20,7 +20,7 @@ void main() {
     await db.close();
   });
 
-  Future<void> _seedBookmark({
+  Future<void> seedBookmark({
     required String id,
     String? folderId,
     String? notes,
@@ -44,7 +44,7 @@ void main() {
     );
   }
 
-  Future<void> _seedFolder({
+  Future<void> seedFolder({
     required String id,
     String? parentId,
     int createdAt = 1000,
@@ -56,7 +56,7 @@ void main() {
     );
   }
 
-  Future<void> _seedTag({
+  Future<void> seedTag({
     required String id,
     int createdAt = 1000,
   }) async {
@@ -67,7 +67,7 @@ void main() {
     );
   }
 
-  Future<void> _seedLink(String bookmarkId, String tagId) async {
+  Future<void> seedLink(String bookmarkId, String tagId) async {
     await db.customStatement(
       'INSERT INTO bookmark_tags (bookmark_id, tag_id, created_at) '
       'VALUES (?, ?, ?)',
@@ -85,7 +85,7 @@ void main() {
   });
 
   test('single bookmark with no tags has tagIds = []', () async {
-    await _seedBookmark(id: 'b1');
+    await seedBookmark(id: 'b1');
     final snapshot = await builder.build();
     expect(snapshot.bookmarks, hasLength(1));
     expect(snapshot.bookmarks.first.id, 'b1');
@@ -93,20 +93,20 @@ void main() {
   });
 
   test('single bookmark with two tags has tagIds in tagId order', () async {
-    await _seedBookmark(id: 'b1');
-    await _seedTag(id: 't-alpha');
-    await _seedTag(id: 't-beta');
-    await _seedLink('b1', 't-beta');
-    await _seedLink('b1', 't-alpha');
+    await seedBookmark(id: 'b1');
+    await seedTag(id: 't-alpha');
+    await seedTag(id: 't-beta');
+    await seedLink('b1', 't-beta');
+    await seedLink('b1', 't-alpha');
 
     final snapshot = await builder.build();
     expect(snapshot.bookmarks.first.tagIds, ['t-alpha', 't-beta']);
   });
 
   test('nested folders appear with correct parentId references', () async {
-    await _seedFolder(id: 'f-root', createdAt: 100);
-    await _seedFolder(id: 'f-child', parentId: 'f-root', createdAt: 200);
-    await _seedFolder(id: 'f-grand', parentId: 'f-child', createdAt: 300);
+    await seedFolder(id: 'f-root', createdAt: 100);
+    await seedFolder(id: 'f-child', parentId: 'f-root', createdAt: 200);
+    await seedFolder(id: 'f-grand', parentId: 'f-child', createdAt: 300);
 
     final snapshot = await builder.build();
     expect(snapshot.folders, hasLength(3));
@@ -121,10 +121,10 @@ void main() {
   });
 
   test('two snapshots of a stable DB produce byte-identical JSON', () async {
-    await _seedFolder(id: 'f1', createdAt: 100);
-    await _seedBookmark(id: 'b1', folderId: 'f1', createdAt: 200);
-    await _seedTag(id: 't1');
-    await _seedLink('b1', 't1');
+    await seedFolder(id: 'f1', createdAt: 100);
+    await seedBookmark(id: 'b1', folderId: 'f1', createdAt: 200);
+    await seedTag(id: 't1');
+    await seedLink('b1', 't1');
 
     final json1 = jsonEncode((await builder.build()).toJson());
     final json2 = jsonEncode((await builder.build()).toJson());
@@ -134,7 +134,7 @@ void main() {
   test('bookmark createdAt/updatedAt are emitted as ISO 8601 UTC strings',
       () async {
     // 1716210000000 ms since epoch -> 2024-05-20T13:00:00.000Z
-    await _seedBookmark(id: 'b1', createdAt: 1716210000000, updatedAt: 1716220000000);
+    await seedBookmark(id: 'b1', createdAt: 1716210000000, updatedAt: 1716220000000);
 
     final snapshot = await builder.build();
     final bm = snapshot.bookmarks.single;
@@ -147,7 +147,7 @@ void main() {
 
   test('null bookmark fields (notes, folderId, faviconBase64) are preserved',
       () async {
-    await _seedBookmark(id: 'b1');
+    await seedBookmark(id: 'b1');
     final snapshot = await builder.build();
     final bm = snapshot.bookmarks.single;
     expect(bm.notes, isNull);
@@ -156,9 +156,9 @@ void main() {
   });
 
   test('bookmarks are sorted by createdAt ASC then id ASC', () async {
-    await _seedBookmark(id: 'b-z', createdAt: 100);
-    await _seedBookmark(id: 'b-a', createdAt: 100); // tied
-    await _seedBookmark(id: 'b-m', createdAt: 50);
+    await seedBookmark(id: 'b-z', createdAt: 100);
+    await seedBookmark(id: 'b-a', createdAt: 100); // tied
+    await seedBookmark(id: 'b-m', createdAt: 50);
 
     final snapshot = await builder.build();
     expect(snapshot.bookmarks.map((b) => b.id).toList(),

@@ -172,7 +172,7 @@ Map<String, Object?> _b(
     'id': id,
     'url': 'https://example.com/$id',
     'title': 'Title $id',
-    ?'folderId': folderId,
+    'folderId': folderId,
     'tagIds': tagIds,
     'createdAt': iso,
     'updatedAt': iso,
@@ -184,7 +184,7 @@ Map<String, Object?> _f(String id, {String? parentId}) {
   return {
     'id': id,
     'name': 'Folder $id',
-    ?'parentId': parentId,
+    'parentId': parentId,
     'createdAt': iso,
     'updatedAt': iso,
   };

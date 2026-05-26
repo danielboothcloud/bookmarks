@@ -10,10 +10,10 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('DriveBookmarksFile JSON envelope (v1)', () {
     test('toJson/fromJson round-trips a populated envelope', () {
-      final original = DriveBookmarksFile(
+      const original = DriveBookmarksFile(
         version: 1,
         lastModified: '2026-05-20T14:23:45.123Z',
-        bookmarks: const [
+        bookmarks: [
           DriveBookmark(
             id: 'b1',
             url: 'https://example.com',
@@ -26,7 +26,7 @@ void main() {
             updatedAt: '2026-05-20T10:00:00.000Z',
           ),
         ],
-        folders: const [
+        folders: [
           DriveFolder(
             id: 'f1',
             name: 'Reading',
@@ -35,7 +35,7 @@ void main() {
             updatedAt: '2026-05-20T09:00:00.000Z',
           ),
         ],
-        tags: const [
+        tags: [
           DriveTag(
             id: 't1',
             name: 'flutter',
@@ -95,12 +95,12 @@ void main() {
     });
 
     test('field order follows declaration order', () {
-      final file = DriveBookmarksFile(
+      const file = DriveBookmarksFile(
         version: 1,
         lastModified: '2026-05-20T14:23:45.123Z',
-        bookmarks: const [],
-        folders: const [],
-        tags: const [],
+        bookmarks: [],
+        folders: [],
+        tags: [],
       );
       final json = file.toJson();
       // Map.keys preserves insertion order, which json_serializable emits
@@ -141,12 +141,12 @@ void main() {
     });
 
     test('compact JSON has no extra whitespace', () {
-      final file = DriveBookmarksFile(
+      const file = DriveBookmarksFile(
         version: 1,
         lastModified: '2026-05-20T14:23:45.123Z',
-        bookmarks: const [],
-        folders: const [],
-        tags: const [],
+        bookmarks: [],
+        folders: [],
+        tags: [],
       );
       final compact = jsonEncode(file.toJson());
       // Compact encoding contains no spaces or newlines.

@@ -75,9 +75,9 @@ void _seedCreds(_InMemorySecureStorage storage) {
 class _FakeDriveServer {
   _FakeDriveServer({String? initialRemoteJson}) {
     if (initialRemoteJson != null) {
-      _remoteContent = initialRemoteJson;
+      remoteContent = initialRemoteJson;
     } else {
-      _remoteContent = jsonEncode({
+      remoteContent = jsonEncode({
         'version': 1,
         'lastModified': DateTime.now().toUtc().toIso8601String(),
         'bookmarks': <Object>[],
@@ -87,9 +87,7 @@ class _FakeDriveServer {
     }
   }
 
-  late String _remoteContent;
-  String get remoteContent => _remoteContent;
-  set remoteContent(String value) => _remoteContent = value;
+  late String remoteContent;
 
   final List<http.Request> updateRequests = <http.Request>[];
   final List<http.Request> getRequests = <http.Request>[];
@@ -118,7 +116,7 @@ class _FakeDriveServer {
           );
         }
         // Default success: persist the body, return 200 with file metadata.
-        _remoteContent = body;
+        remoteContent = body;
         final ok = jsonEncode({'id': 'file-id-1', 'name': 'bookmarks.json'});
         return http.StreamedResponse(
           Stream<List<int>>.value(utf8.encode(ok)),
@@ -133,7 +131,7 @@ class _FakeDriveServer {
           url.path.startsWith('/drive/v3/files/')) {
         getRequests.add(http.Request(request.method, url));
         return http.StreamedResponse(
-          Stream<List<int>>.value(utf8.encode(_remoteContent)),
+          Stream<List<int>>.value(utf8.encode(remoteContent)),
           200,
           headers: const {'content-type': 'application/json'},
         );
@@ -244,7 +242,7 @@ Future<void> _seedBookmark(AppDatabase db, String id) async {
   await db.customStatement(
     'INSERT INTO bookmarks (id, url, title, notes, folder_id, '
     'favicon_base64, created_at, updated_at) '
-    "VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)",
+    'VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)',
     [id, 'https://example.com/$id', 'Title $id', 1, 1],
   );
 }
@@ -366,7 +364,7 @@ void main() {
       // insert is sync enough for sqlite.
       // ignore: discarded_futures
       db.customStatement(
-        "INSERT INTO sync_queue (operation, entity_type, entity_id, "
+        'INSERT INTO sync_queue (operation, entity_type, entity_id, '
         "payload, created_at) VALUES ('upsert', 'bookmark', 'b-mid', "
         'NULL, 9999999)',
       );
@@ -597,7 +595,7 @@ void main() {
     final repo = SyncQueueRepository(db);
     // Manually seed a delete row without an underlying bookmark.
     await db.customStatement(
-      "INSERT INTO sync_queue (operation, entity_type, entity_id, payload, "
+      'INSERT INTO sync_queue (operation, entity_type, entity_id, payload, '
       "created_at) VALUES ('delete', 'bookmark', 'bm-gone', NULL, 1)",
     );
 

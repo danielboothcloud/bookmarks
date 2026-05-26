@@ -6,7 +6,6 @@ import 'package:bookmarks/core/drive/drive_auth_providers.dart';
 import 'package:bookmarks/core/drive/drive_auth_service.dart';
 import 'package:bookmarks/core/drive/drive_auth_state.dart';
 import 'package:bookmarks/core/drive/drive_file_service.dart';
-import 'package:bookmarks/core/drive/oauth_config.dart';
 import 'package:bookmarks/core/router/app_router.dart';
 import 'package:bookmarks/features/onboarding/presentation/welcome_screen.dart';
 import 'package:flutter/material.dart';
@@ -122,9 +121,8 @@ class _DrivenLauncher implements UrlLauncher {
 }
 
 class _FakeDriveFileService implements DriveFileService {
-  final String fileId;
+  final String fileId = 'integration-file-id';
   String? lastToken;
-  _FakeDriveFileService({this.fileId = 'integration-file-id'});
 
   @override
   Future<String> ensureBookmarksFile({required String accessToken}) async {

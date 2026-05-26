@@ -355,10 +355,10 @@ void main() {
     // Boot the orchestrator + keep the StreamProviders subscribed for
     // the duration of the test.
     container.read(autoPushOrchestratorProvider);
-    container.listen(syncQueuePendingCountProvider, (_, __) {},
+    container.listen(syncQueuePendingCountProvider, (_, _) {},
         fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(hasEverSyncedProvider, (_, __) {},
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, _) {},
         fireImmediately: true);
 
     final state = await _runImport(container);
@@ -403,10 +403,10 @@ void main() {
     addTearDown(container.dispose);
 
     container.read(autoPushOrchestratorProvider);
-    container.listen(syncQueuePendingCountProvider, (_, __) {},
+    container.listen(syncQueuePendingCountProvider, (_, _) {},
         fireImmediately: true);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(hasEverSyncedProvider, (_, __) {},
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, _) {},
         fireImmediately: true);
 
     final state = await _runImport(container);

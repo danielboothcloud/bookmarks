@@ -30,7 +30,7 @@ void main() {
       () async {
     final rows = await db
         .customSelect(
-          "SELECT sql FROM sqlite_master "
+          'SELECT sql FROM sqlite_master '
           "WHERE type = 'index' AND name = 'idx_tags_lower_name'",
           variables: <Variable<Object>>[],
         )
@@ -50,13 +50,13 @@ void main() {
     // index on `lower(name)` should reject the second insert. A regression to
     // a plain `ON tags (name)` index would silently accept it.
     await db.customStatement(
-      "INSERT INTO tags (id, name, created_at, updated_at) "
+      'INSERT INTO tags (id, name, created_at, updated_at) '
       "VALUES ('t1', 'Flutter', 1, 1)",
     );
 
     expect(
       () => db.customStatement(
-        "INSERT INTO tags (id, name, created_at, updated_at) "
+        'INSERT INTO tags (id, name, created_at, updated_at) '
         "VALUES ('t2', 'flutter', 1, 1)",
       ),
       throwsA(anything),

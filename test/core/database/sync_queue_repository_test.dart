@@ -1,6 +1,5 @@
 import 'package:bookmarks/core/database/app_database.dart';
 import 'package:bookmarks/core/database/sync_queue_repository.dart';
-import 'package:drift/drift.dart' show Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -17,7 +16,7 @@ void main() {
     await db.close();
   });
 
-  Future<void> _seed(
+  Future<void> seed(
     String operation,
     String entityType,
     String entityId, {
@@ -48,11 +47,11 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(emissions.last, 0);
 
-    await _seed('upsert', 'bookmark', 'b1');
+    await seed('upsert', 'bookmark', 'b1');
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(emissions.last, 1);
 
-    await _seed('delete', 'folder', 'f1');
+    await seed('delete', 'folder', 'f1');
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(emissions.last, 2);
 
@@ -60,9 +59,9 @@ void main() {
   });
 
   test('drain returns rows in created_at ASC then id ASC order', () async {
-    await _seed('upsert', 'bookmark', 'b1', createdAt: 1000);
-    await _seed('upsert', 'folder', 'f1', createdAt: 2000);
-    await _seed('upsert', 'tag', 't1', createdAt: 1000); // tied timestamp
+    await seed('upsert', 'bookmark', 'b1', createdAt: 1000);
+    await seed('upsert', 'folder', 'f1', createdAt: 2000);
+    await seed('upsert', 'tag', 't1', createdAt: 1000); // tied timestamp
     // id ordering is 1, 2, 3 so for the tied timestamps the earlier insert
     // (b1) comes before t1.
 
@@ -71,9 +70,9 @@ void main() {
   });
 
   test('deleteByIds removes only the specified rows', () async {
-    await _seed('upsert', 'bookmark', 'b1');
-    await _seed('upsert', 'bookmark', 'b2');
-    await _seed('upsert', 'bookmark', 'b3');
+    await seed('upsert', 'bookmark', 'b1');
+    await seed('upsert', 'bookmark', 'b2');
+    await seed('upsert', 'bookmark', 'b3');
 
     final all = await repo.drain();
     expect(all, hasLength(3));
@@ -87,7 +86,7 @@ void main() {
   });
 
   test('deleteByIds with empty list is a no-op', () async {
-    await _seed('upsert', 'bookmark', 'b1');
+    await seed('upsert', 'bookmark', 'b1');
     final count = await repo.deleteByIds(const <int>[]);
     expect(count, 0);
     expect(await repo.drain(), hasLength(1));
@@ -96,12 +95,12 @@ void main() {
   test(
       'rows inserted between drain() and deleteByIds() survive the selective '
       'delete', () async {
-    await _seed('upsert', 'bookmark', 'b1');
+    await seed('upsert', 'bookmark', 'b1');
     final drained = await repo.drain();
     expect(drained, hasLength(1));
 
     // Simulate a fresh user mutation arriving after the drain snapshot.
-    await _seed('upsert', 'bookmark', 'b2');
+    await seed('upsert', 'bookmark', 'b2');
 
     await repo.deleteByIds(drained.map((r) => r.id).toList());
 
@@ -118,9 +117,9 @@ void main() {
 
   test('clear() on a populated queue returns N and empties the queue',
       () async {
-    await _seed('upsert', 'bookmark', 'b1');
-    await _seed('upsert', 'folder', 'f1');
-    await _seed('delete', 'tag', 't1');
+    await seed('upsert', 'bookmark', 'b1');
+    await seed('upsert', 'folder', 'f1');
+    await seed('delete', 'tag', 't1');
 
     expect(await repo.drain(), hasLength(3));
 
@@ -138,7 +137,7 @@ void main() {
       "VALUES ('b1', 'https://example.com', 'Title', NULL, NULL, NULL, 1, 1)",
     );
     await db.customStatement(
-      "INSERT INTO folders (id, name, parent_id, created_at, updated_at) "
+      'INSERT INTO folders (id, name, parent_id, created_at, updated_at) '
       "VALUES ('f1', 'Folder', NULL, 1, 1)",
     );
 
@@ -172,7 +171,7 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(emissions.last, 0);
 
-    await _seed('upsert', 'bookmark', 'b1');
+    await seed('upsert', 'bookmark', 'b1');
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(emissions.last, 1);
 

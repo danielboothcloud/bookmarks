@@ -279,10 +279,10 @@ void main() {
     addTearDown(container.dispose);
 
     container.read(autoPushOrchestratorProvider);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncQueuePendingCountProvider, (_, __) {},
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {},
         fireImmediately: true);
-    container.listen(hasEverSyncedProvider, (_, __) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, _) {}, fireImmediately: true);
 
     // Seed 3 bookmarks and let the first sync complete.
     final repo = BookmarkRepository(db);
@@ -340,8 +340,8 @@ void main() {
     addTearDown(container.dispose);
 
     container.read(autoPushOrchestratorProvider);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncQueuePendingCountProvider, (_, __) {},
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {},
         fireImmediately: true);
 
     // Initial sync (auth started connected).
@@ -393,8 +393,8 @@ void main() {
     addTearDown(container.dispose);
 
     container.read(autoPushOrchestratorProvider);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(syncQueuePendingCountProvider, (_, __) {},
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(syncQueuePendingCountProvider, (_, _) {},
         fireImmediately: true);
 
     final repo = BookmarkRepository(db);
@@ -431,7 +431,7 @@ void main() {
     addTearDown(container.dispose);
 
     container.read(autoPushOrchestratorProvider);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
 
     final repo = BookmarkRepository(db);
     for (var i = 0; i < 5; i++) {
@@ -468,8 +468,8 @@ void main() {
     addTearDown(container.dispose);
 
     container.read(autoPushOrchestratorProvider);
-    container.listen(syncStatusProvider, (_, __) {}, fireImmediately: true);
-    container.listen(hasEverSyncedProvider, (_, __) {}, fireImmediately: true);
+    container.listen(syncStatusProvider, (_, _) {}, fireImmediately: true);
+    container.listen(hasEverSyncedProvider, (_, _) {}, fireImmediately: true);
 
     final repo = BookmarkRepository(db);
     await repo.save(_bm('b1'));

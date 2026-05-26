@@ -132,11 +132,9 @@ class _RecordingLauncher implements UrlLauncher {
 }
 
 class _FakeDriveFileService implements DriveFileService {
-  String fileId;
+  String fileId = 'fake-file-id-1';
   String? recordedAccessToken;
   Object? throwOnEnsure;
-
-  _FakeDriveFileService({this.fileId = 'fake-file-id-1'});
 
   @override
   Future<String> ensureBookmarksFile({required String accessToken}) async {

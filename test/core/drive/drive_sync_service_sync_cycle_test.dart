@@ -51,11 +51,11 @@ void _seedCreds(_InMemorySecureStorage storage) {
 }
 
 class _CycleFakeDrive {
-  _CycleFakeDrive({this.pullStatus = 200, this.pullBody, this.pushStatus = 200});
+  _CycleFakeDrive({this.pullStatus = 200});
 
   final int pullStatus;
   String? pullBody;
-  final int pushStatus;
+  final int pushStatus = 200;
   int getCount = 0;
   int updateCount = 0;
 

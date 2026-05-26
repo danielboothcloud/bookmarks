@@ -63,7 +63,7 @@ void main() {
     await db.customStatement('DELETE FROM sync_queue');
   }
 
-  Bookmark _bookmark({
+  Bookmark makeBookmark({
     required String id,
     String? folderId,
     String title = 'Title',
@@ -79,7 +79,7 @@ void main() {
     );
   }
 
-  Folder _folder({required String id, String? parentId, String name = 'F'}) {
+  Folder makeFolder({required String id, String? parentId, String name = 'F'}) {
     final now = DateTime.now();
     return Folder(
       id: id,
@@ -96,7 +96,7 @@ void main() {
     });
 
     test('folder insert/rename/delete each enqueue one row', () async {
-      await folderRepo.save(_folder(id: 'f-root'));
+      await folderRepo.save(makeFolder(id: 'f-root'));
       expect((await syncQueueRows()).last, {
         'operation': 'upsert',
         'entity_type': 'folder',
@@ -105,7 +105,7 @@ void main() {
       });
 
       await clearSyncQueue();
-      await folderRepo.save(_folder(id: 'f-root', name: 'Renamed'));
+      await folderRepo.save(makeFolder(id: 'f-root', name: 'Renamed'));
       // FolderRepository.save uses insertOnConflictUpdate (an UPSERT, not a
       // REPLACE), so the second save of an existing PK fires AU exactly
       // once -> one folder-upsert row.
@@ -135,7 +135,7 @@ void main() {
     });
 
     test('bookmark insert / update / delete each enqueue rows', () async {
-      await bookmarkRepo.save(_bookmark(id: 'bm-1'));
+      await bookmarkRepo.save(makeBookmark(id: 'bm-1'));
       expect((await syncQueueRows()).last, {
         'operation': 'upsert',
         'entity_type': 'bookmark',
@@ -144,7 +144,7 @@ void main() {
       });
 
       await clearSyncQueue();
-      await bookmarkRepo.save(_bookmark(id: 'bm-1', title: 'Updated'));
+      await bookmarkRepo.save(makeBookmark(id: 'bm-1', title: 'Updated'));
       // BookmarkRepository.save uses insertOnConflictUpdate -> the second
       // save of an existing PK fires AU exactly once.
       expect(await syncQueueRows(), [
@@ -173,7 +173,7 @@ void main() {
     });
 
     test('tag link / unlink each enqueue a bookmark-upsert row', () async {
-      await bookmarkRepo.save(_bookmark(id: 'bm-tag'));
+      await bookmarkRepo.save(makeBookmark(id: 'bm-tag'));
       final upsertResult = await tagRepo.upsertByName('flutter');
       final tag = (upsertResult as Ok<Tag, dynamic>).value;
 
@@ -241,10 +241,10 @@ void main() {
 
     test('cascade folder delete enqueues rows for every affected row',
         () async {
-      await folderRepo.save(_folder(id: 'f-root'));
-      await folderRepo.save(_folder(id: 'f-child', parentId: 'f-root'));
-      await bookmarkRepo.save(_bookmark(id: 'bm-c1', folderId: 'f-child'));
-      await bookmarkRepo.save(_bookmark(id: 'bm-c2', folderId: 'f-root'));
+      await folderRepo.save(makeFolder(id: 'f-root'));
+      await folderRepo.save(makeFolder(id: 'f-child', parentId: 'f-root'));
+      await bookmarkRepo.save(makeBookmark(id: 'bm-c1', folderId: 'f-child'));
+      await bookmarkRepo.save(makeBookmark(id: 'bm-c2', folderId: 'f-root'));
 
       await clearSyncQueue();
       await folderRepo.deleteCascade({'f-root', 'f-child'});
@@ -276,7 +276,7 @@ void main() {
         () async {
       // Populate via repository (which fires sync triggers) -- clear queue
       // -- then run an FTS-only rebuild and assert nothing else enqueued.
-      await bookmarkRepo.save(_bookmark(id: 'bm-fts'));
+      await bookmarkRepo.save(makeBookmark(id: 'bm-fts'));
       await clearSyncQueue();
 
       await db.customStatement(
@@ -288,7 +288,7 @@ void main() {
     });
 
     test('FTS-internal optimize produces zero sync_queue rows', () async {
-      await bookmarkRepo.save(_bookmark(id: 'bm-opt'));
+      await bookmarkRepo.save(makeBookmark(id: 'bm-opt'));
       await clearSyncQueue();
       await db.customStatement(
         "INSERT INTO bookmarks_fts(bookmarks_fts) VALUES('optimize')",

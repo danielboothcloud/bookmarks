@@ -19,16 +19,16 @@ void main() {
     verifier = SchemaVerifier(GeneratedHelper());
   });
 
-  Future<List<String>> _allSyncTriggerNames(AppDatabase db) async {
+  Future<List<String>> allSyncTriggerNames(AppDatabase db) async {
     final rows = await db.customSelect(
-      "SELECT name FROM sqlite_master "
+      'SELECT name FROM sqlite_master '
       "WHERE type='trigger' AND name LIKE '%_sync_%' ORDER BY name",
       variables: <Variable<Object>>[],
     ).get();
     return rows.map((r) => r.read<String>('name')).toList();
   }
 
-  Future<List<Map<String, Object?>>> _syncQueueRows(AppDatabase db) async {
+  Future<List<Map<String, Object?>>> syncQueueRows(AppDatabase db) async {
     final rows = await db.customSelect(
       'SELECT id, operation, entity_type, entity_id, payload, created_at '
       'FROM sync_queue ORDER BY id',
@@ -65,7 +65,7 @@ void main() {
         .customSelect('SELECT 1', variables: <Variable<Object>>[])
         .getSingle();
 
-    final triggers = await _allSyncTriggerNames(db);
+    final triggers = await allSyncTriggerNames(db);
     expect(triggers, [
       'bookmark_tags_sync_ad',
       'bookmark_tags_sync_ai',
@@ -80,7 +80,7 @@ void main() {
       'tags_sync_au',
     ]);
 
-    expect(await _syncQueueRows(db), isEmpty,
+    expect(await syncQueueRows(db), isEmpty,
         reason: 'migration must not seed sync_queue');
 
     await db.close();
@@ -136,7 +136,7 @@ void main() {
     expect(tags.map((r) => r.read<String>('id')).toList(), ['t-pre']);
 
     // Pre-existing rows must not have produced queue entries.
-    expect(await _syncQueueRows(db), isEmpty);
+    expect(await syncQueueRows(db), isEmpty);
 
     await db.close();
   });
@@ -155,7 +155,7 @@ void main() {
       'NULL, NULL, NULL, 10, 10)',
     );
 
-    final rows = await _syncQueueRows(db);
+    final rows = await syncQueueRows(db);
     expect(rows, hasLength(1));
     expect(rows.single['operation'], 'upsert');
     expect(rows.single['entity_type'], 'bookmark');
@@ -182,7 +182,7 @@ void main() {
       "UPDATE bookmarks SET title = 'New' WHERE id = 'bm-up'",
     );
 
-    final rows = await _syncQueueRows(db);
+    final rows = await syncQueueRows(db);
     expect(rows, hasLength(1));
     expect(rows.single['operation'], 'upsert');
     expect(rows.single['entity_type'], 'bookmark');
@@ -220,7 +220,7 @@ void main() {
     );
     await db.customStatement("DELETE FROM bookmarks WHERE id = 'bm-d'");
 
-    final rows = await _syncQueueRows(db);
+    final rows = await syncQueueRows(db);
     // 1 row from bookmark_tags_sync_ad (upsert bookmark) +
     // 1 row from bookmarks_sync_ad (delete bookmark) = 2 rows.
     expect(rows, hasLength(2));
@@ -251,7 +251,7 @@ void main() {
     );
     await db.customStatement("DELETE FROM folders WHERE id = 'f1'");
 
-    final rows = await _syncQueueRows(db);
+    final rows = await syncQueueRows(db);
     expect(rows, hasLength(3));
     expect(rows[0]['operation'], 'upsert');
     expect(rows[0]['entity_type'], 'folder');
@@ -280,7 +280,7 @@ void main() {
     );
     await db.customStatement("DELETE FROM tags WHERE id = 't1'");
 
-    final rows = await _syncQueueRows(db);
+    final rows = await syncQueueRows(db);
     expect(rows, hasLength(3));
     expect(rows[0]['operation'], 'upsert');
     expect(rows[0]['entity_type'], 'tag');
@@ -318,7 +318,7 @@ void main() {
       "DELETE FROM bookmark_tags WHERE bookmark_id = 'bm-l' AND tag_id = 't-l'",
     );
 
-    final rows = await _syncQueueRows(db);
+    final rows = await syncQueueRows(db);
     expect(rows, hasLength(2));
     // Both link-insert AND link-delete are observed as a bookmark-upsert
     // because the user-visible change is "the bookmark's tag list differs".
@@ -351,14 +351,14 @@ void main() {
       "VALUES ('bm-fts', 'https://example.com', 'FTS', NULL, NULL, NULL, 1, 1)",
     );
     await db.customStatement('DELETE FROM sync_queue');
-    expect(await _syncQueueRows(db), isEmpty);
+    expect(await syncQueueRows(db), isEmpty);
 
     await db.customStatement(
       "INSERT INTO bookmarks_fts(bookmarks_fts) VALUES('rebuild')",
     );
 
     // Rebuild is an FTS-only operation; it must not touch sync_queue.
-    expect(await _syncQueueRows(db), isEmpty);
+    expect(await syncQueueRows(db), isEmpty);
 
     await db.close();
   });
@@ -369,7 +369,7 @@ void main() {
         .customSelect('SELECT 1', variables: <Variable<Object>>[])
         .getSingle();
 
-    final triggers = await _allSyncTriggerNames(db);
+    final triggers = await allSyncTriggerNames(db);
     expect(triggers, hasLength(11));
 
     // A bookmark insert on a fresh v7 DB fires the trigger end-to-end.
@@ -379,7 +379,7 @@ void main() {
       "VALUES ('bm-fresh', 'https://example.com', 'Fresh', "
       'NULL, NULL, NULL, 1, 1)',
     );
-    final rows = await _syncQueueRows(db);
+    final rows = await syncQueueRows(db);
     expect(rows, hasLength(1));
     expect(rows.single['entity_id'], 'bm-fresh');
 

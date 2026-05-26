@@ -77,18 +77,18 @@ void main() {
     await db.close();
   });
 
-  Future<int> _countTable(String table) async {
+  Future<int> countTable(String table) async {
     final row = await db
         .customSelect('SELECT COUNT(*) AS c FROM $table')
         .getSingle();
     return row.read<int>('c');
   }
 
-  Future<int> _countFts() async {
-    return _countTable('bookmarks_fts');
+  Future<int> countFts() async {
+    return countTable('bookmarks_fts');
   }
 
-  Future<List<int>> _queueIds() async {
+  Future<List<int>> queueIds() async {
     final rows = await db
         .customSelect('SELECT id FROM sync_queue ORDER BY id ASC')
         .get();
@@ -98,11 +98,11 @@ void main() {
   test('empty remote on empty local — no-op; queue empty', () async {
     final result = await applier.apply(_envelope(lastModifiedMs: 1000));
     expect(result, isA<Ok<void, AppError>>());
-    expect(await _countTable('bookmarks'), 0);
-    expect(await _countTable('folders'), 0);
-    expect(await _countTable('tags'), 0);
-    expect(await _countTable('bookmark_tags'), 0);
-    expect(await _queueIds(), isEmpty);
+    expect(await countTable('bookmarks'), 0);
+    expect(await countTable('folders'), 0);
+    expect(await countTable('tags'), 0);
+    expect(await countTable('bookmark_tags'), 0);
+    expect(await queueIds(), isEmpty);
   });
 
   test('single remote bookmark on empty local — bookmark row, FTS row, '
@@ -114,9 +114,9 @@ void main() {
       ),
     );
     expect(result, isA<Ok<void, AppError>>());
-    expect(await _countTable('bookmarks'), 1);
-    expect(await _countFts(), 1);
-    expect(await _queueIds(), isEmpty,
+    expect(await countTable('bookmarks'), 1);
+    expect(await countFts(), 1);
+    expect(await queueIds(), isEmpty,
         reason: 'merge-produced sync_queue rows must be cleaned up');
   });
 
@@ -133,11 +133,11 @@ void main() {
       ),
     );
     expect(result, isA<Ok<void, AppError>>());
-    expect(await _countTable('bookmarks'), 1);
-    expect(await _countTable('folders'), 1);
-    expect(await _countTable('tags'), 2);
-    expect(await _countTable('bookmark_tags'), 2);
-    expect(await _queueIds(), isEmpty);
+    expect(await countTable('bookmarks'), 1);
+    expect(await countTable('folders'), 1);
+    expect(await countTable('tags'), 2);
+    expect(await countTable('bookmark_tags'), 2);
+    expect(await queueIds(), isEmpty);
   });
 
   test('remote deletes bookmark that existed locally — junction rows + '
@@ -163,12 +163,12 @@ void main() {
     // Remote has lastModified > local updatedAt and no bookmark/tag.
     final result = await applier.apply(_envelope(lastModifiedMs: 5000));
     expect(result, isA<Ok<void, AppError>>());
-    expect(await _countTable('bookmarks'), 0);
-    expect(await _countTable('bookmark_tags'), 0);
-    expect(await _countTable('tags'), 0,
+    expect(await countTable('bookmarks'), 0);
+    expect(await countTable('bookmark_tags'), 0);
+    expect(await countTable('tags'), 0,
         reason: 'orphan tag swept after junction removed');
-    expect(await _countFts(), 0);
-    expect(await _queueIds(), isEmpty);
+    expect(await countFts(), 0);
+    expect(await queueIds(), isEmpty);
   });
 
   test('folder cascade delete — all descendants gone; queue empty', () async {
@@ -196,11 +196,11 @@ void main() {
 
     final result = await applier.apply(_envelope(lastModifiedMs: 5000));
     expect(result, isA<Ok<void, AppError>>());
-    expect(await _countTable('folders'), 0);
-    expect(await _countTable('bookmarks'), 0);
-    expect(await _countTable('bookmark_tags'), 0);
-    expect(await _countTable('tags'), 0);
-    expect(await _queueIds(), isEmpty);
+    expect(await countTable('folders'), 0);
+    expect(await countTable('bookmarks'), 0);
+    expect(await countTable('bookmark_tags'), 0);
+    expect(await countTable('tags'), 0);
+    expect(await queueIds(), isEmpty);
   });
 
   test('pre-existing queue row survives merge; only merge-produced rows '
@@ -212,7 +212,7 @@ void main() {
       'VALUES (?, ?, ?, ?, ?)',
       ['b-user', 'https://example.com', 'User', 100, 9000],
     );
-    final preMergeIds = await _queueIds();
+    final preMergeIds = await queueIds();
     expect(preMergeIds, hasLength(1),
         reason: 'sanity: one queue row from the user-seed');
 
@@ -226,10 +226,10 @@ void main() {
       ),
     );
     expect(result, isA<Ok<void, AppError>>());
-    expect(await _countTable('bookmarks'), 2,
+    expect(await countTable('bookmarks'), 2,
         reason: 'local bookmark survives because its updatedAt > '
             'remote lastModified');
-    final postQueue = await _queueIds();
+    final postQueue = await queueIds();
     expect(postQueue, preMergeIds,
         reason: 'pre-existing queue rows preserved; merge-produced '
             'cleared');
@@ -250,16 +250,16 @@ void main() {
     // returns Err(StorageError). The transaction rolls back; nothing
     // persisted.
     final result = await applier.apply(
-      DriveBookmarksFile(
+      const DriveBookmarksFile(
         version: 1,
         lastModified: 'not-a-date',
-        bookmarks: const <DriveBookmark>[],
+        bookmarks: <DriveBookmark>[],
       ),
     );
     expect(result, isA<Err<void, AppError>>());
-    expect(await _countTable('bookmarks'), 1,
+    expect(await countTable('bookmarks'), 1,
         reason: 'local DB unchanged on rollback');
-    expect(await _queueIds(), isEmpty);
+    expect(await queueIds(), isEmpty);
   });
 
   test('topologically-sorted folder upserts on empty local — '
@@ -334,6 +334,6 @@ void main() {
         .customSelect('SELECT id FROM tags ORDER BY id ASC')
         .get();
     expect(tagIds.map((r) => r.read<String>('id')).toList(), ['t1', 't2']);
-    expect(await _queueIds(), isEmpty);
+    expect(await queueIds(), isEmpty);
   });
 }
