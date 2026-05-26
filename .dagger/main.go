@@ -67,10 +67,12 @@ func (m *Bookmarks) linuxBase() *dagger.Container {
 			// keyring API, jsoncpp parses the secret payloads.
 			"libsecret-1-dev",
 			"libjsoncpp-dev",
-			// Flutter's native_toolchain_c expects ld.lld next to clang
-			// in /usr/lib/llvm-14/bin/; debian's clang package doesn't
-			// bundle it, so we install lld separately.
+			// Flutter's native_toolchain_c expects the full LLVM
+			// toolchain (ld.lld, llvm-ar, llvm-ranlib, llvm-objcopy,
+			// llvm-strip) next to clang in /usr/lib/llvm-14/bin/.
+			// Debian's clang package only ships clang itself.
 			"lld",
+			"llvm",
 		})
 }
 
