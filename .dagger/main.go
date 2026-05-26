@@ -149,31 +149,29 @@ func (m *Bookmarks) Codegen(
 // — if a contributor changes a `.drift` source without committing the
 // regenerated output, the workflow fails with a diff.
 //
-// We can't use `git diff` because the mounted source has no `.git`.
-// Instead we snapshot the generated trees before regeneration, then
-// `diff -r` against them after.
+// The mounted source has no `.git`, so we initialise a throwaway repo
+// inside the container, snapshot HEAD, regenerate, then `git diff
+// --exit-code` against the snapshot using pathspec globs that git
+// (unlike POSIX `diff`) understands natively.
 func (m *Bookmarks) CodegenCheck(
 	ctx context.Context,
 	// +ignore=[".git", ".dart_tool", "build", "coverage", "linux/flutter/ephemeral", "windows/flutter/ephemeral", "macos/Flutter/ephemeral", "macos/Pods", "ios/Pods", ".dagger", "dagger.json", "client-creds.json", "_bmad", "_bmad-output", ".idea", ".opencode", ".claude", "*.log"]
 	source *dagger.Directory,
 ) (string, error) {
-	const snapshotAndDiff = `set -e
-mkdir -p /baseline/lib /baseline/test
-cp -r /src/lib /baseline/lib-snapshot
-cp -r /src/test/generated /baseline/test-generated-snapshot
+	const checkScript = `set -e
+cd /src
+git init -q
+git -c user.email=ci@local -c user.name=ci add -A
+git -c user.email=ci@local -c user.name=ci commit -q -m baseline
 dart run build_runner build --delete-conflicting-outputs
-diff -r /baseline/lib-snapshot /src/lib --include='*.g.dart' --include='*.freezed.dart' --recursive || {
-  echo "ERROR: generated lib/ files drifted — run 'dagger call codegen --source=. export --path=.' and commit the result" >&2
+if ! git diff --exit-code -- '*.g.dart' '*.freezed.dart' 'test/generated/**'; then
+  echo "ERROR: generated files drifted — run 'dagger call codegen --source=. export --path=.' and commit the result" >&2
   exit 1
-}
-diff -r /baseline/test-generated-snapshot /src/test/generated || {
-  echo "ERROR: generated test/generated/ files drifted — run 'dagger call codegen --source=. export --path=.' and commit the result" >&2
-  exit 1
-}
+fi
 echo "codegen clean"
 `
 	return m.withSource(m.flutterLinuxBase(), source).
-		WithExec([]string{"sh", "-c", snapshotAndDiff}).
+		WithExec([]string{"sh", "-c", checkScript}).
 		Stdout(ctx)
 }
 
