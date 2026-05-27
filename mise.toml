@@ -10,6 +10,7 @@ ruby = "3.3"
 # `String.fromEnvironment` and are read by `DriveAuthService` at the
 # token-exchange step.
 [tasks.dev]
+tools = { flutter = "3.41.9" }
 description = "Run the macOS app with OAuth creds from client-creds.json"
 run = '''
 set -e
@@ -26,9 +27,24 @@ flutter run -d macos \
   "$@"
 '''
 
+# `mise run test` — full pre-release verification via the Dagger
+# pipeline: codegen drift check → static analyze → flutter test. Runs
+# in containers, identical to CI. Build tasks depend on this passing.
+[tasks.test]
+tools = { dagger = "latest" }
+description = "Codegen drift check + analyze + flutter test (via Dagger)"
+run = '''
+set -e
+dagger call codegen-check --source=.
+dagger call analyze --source=.
+dagger call test --source=.
+'''
+
 # `mise run build-macos` — release-shaped local build for smoke runs
 # (Task 22). Same credential injection.
 [tasks.build-macos]
+tools = { flutter = "3.41.9", ruby = "3.3", "gem:cocoapods" = "latest" }
+depends = ["test"]
 description = "Build the macOS app (debug) with OAuth creds injected"
 run = '''
 set -e
@@ -44,10 +60,13 @@ flutter build macos --debug \
   --dart-define=BOOKMARKS_OAUTH_CLIENT_SECRET="$CLIENT_SECRET"
 '''
 
-# `mise run build-linux` — debug-shaped local build for smoke runs.
-# Same credential injection as build-macos.
+# `mise run build-linux` — release-shaped Linux build via the Dagger
+# pipeline (`.dagger/main.go`). Same OAuth credential contract as the
+# macOS task; the bundle lands in `./build/linux/x64/release/bundle/`.
 [tasks.build-linux]
-description = "Build the Linux app (debug) with OAuth creds injected"
+tools = { dagger = "latest" }
+depends = ["test"]
+description = "Build the Linux app (release) via Dagger with OAuth creds injected"
 run = '''
 set -e
 CREDS="${BOOKMARKS_CREDS_FILE:-client-creds.json}"
@@ -55,9 +74,33 @@ if [ ! -f "$CREDS" ]; then
   echo "error: $CREDS not found" >&2
   exit 1
 fi
-CLIENT_ID=$(jq -r .installed.client_id "$CREDS")
-CLIENT_SECRET=$(jq -r .installed.client_secret "$CREDS")
-flutter build linux --debug \
-  --dart-define=BOOKMARKS_OAUTH_CLIENT_ID="$CLIENT_ID" \
-  --dart-define=BOOKMARKS_OAUTH_CLIENT_SECRET="$CLIENT_SECRET"
+export BOOKMARKS_OAUTH_CLIENT_ID=$(jq -r .installed.client_id "$CREDS")
+export BOOKMARKS_OAUTH_CLIENT_SECRET=$(jq -r .installed.client_secret "$CREDS")
+dagger call build-linux --source=. \
+  --oauth-client-id=env://BOOKMARKS_OAUTH_CLIENT_ID \
+  --oauth-client-secret=env://BOOKMARKS_OAUTH_CLIENT_SECRET \
+  export --path=./build/linux/x64/release/bundle
+'''
+
+# `mise run build-windows` — release-shaped Windows build via Dagger.
+# Requires a Windows host with Dagger Desktop (containerised Windows
+# builds can't run on macOS/Linux). Bundle lands in
+# `./build/windows/x64/runner/Release/`.
+[tasks.build-windows]
+tools = { dagger = "latest" }
+depends = ["test"]
+description = "Build the Windows app (release) via Dagger with OAuth creds injected"
+run = '''
+set -e
+CREDS="${BOOKMARKS_CREDS_FILE:-client-creds.json}"
+if [ ! -f "$CREDS" ]; then
+  echo "error: $CREDS not found" >&2
+  exit 1
+fi
+export BOOKMARKS_OAUTH_CLIENT_ID=$(jq -r .installed.client_id "$CREDS")
+export BOOKMARKS_OAUTH_CLIENT_SECRET=$(jq -r .installed.client_secret "$CREDS")
+dagger call build-windows --source=. \
+  --oauth-client-id=env://BOOKMARKS_OAUTH_CLIENT_ID \
+  --oauth-client-secret=env://BOOKMARKS_OAUTH_CLIENT_SECRET \
+  export --path=./build/windows/x64/runner/Release
 '''
