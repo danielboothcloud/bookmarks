@@ -27,7 +27,7 @@ const (
 	flutterLinuxRepo     = "https://github.com/flutter/flutter.git"
 	flutterWindowsZipURL = "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_" + flutterVersion + "-stable.zip"
 	flutterLinuxInstall  = "/opt/flutter"
-	pubCacheVolume       = "flutter-pub-cache"
+	pubCacheVolume       = "flutter-pub-cache-v2"
 	pubCachePath         = "/root/.pub-cache"
 )
 
@@ -185,15 +185,27 @@ echo "codegen clean"
 		Stdout(ctx)
 }
 
-// Analyze runs `flutter analyze` with infos and warnings promoted to
+// Analyze runs `dart analyze` with infos and warnings promoted to
 // fatal, matching the strictness expected of a production CI gate.
+//
+// Notes:
+//   - `dart analyze` instead of `flutter analyze`: the flutter wrapper
+//     spawns a long-lived analysis_server daemon that crashes mid-
+//     context-build in Dagger's resource-constrained container.
+//   - DART_VM_OPTIONS bumps the analyzer heap to 4 GB; the default
+//     2 GB is enough locally but tight in a constrained container.
 func (m *Bookmarks) Analyze(
 	ctx context.Context,
 	// +ignore=[".git", ".dart_tool", "build", "coverage", "linux/flutter/ephemeral", "windows/flutter/ephemeral", "macos/Flutter/ephemeral", "macos/Pods", "ios/Pods", ".dagger", "dagger.json", "client-creds.json", "_bmad", "_bmad-output", ".idea", ".opencode", ".claude", "*.log"]
 	source *dagger.Directory,
 ) (string, error) {
 	return m.withSource(m.flutterLinuxBase(), source).
-		WithExec([]string{"flutter", "analyze", "--fatal-infos", "--fatal-warnings"}).
+		WithEnvVariable("DART_VM_OPTIONS", "--old_gen_heap_size=4096").
+		WithExec([]string{
+			"dart", "analyze",
+			"--fatal-infos", "--fatal-warnings",
+			"--packages=.dart_tool/package_config.json",
+		}).
 		Stdout(ctx)
 }
 

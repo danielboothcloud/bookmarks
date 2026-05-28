@@ -36,6 +36,10 @@ url = "https://github.com/dagger/dagger/releases/download/v0.21.0/dagger_v0.21.0
 version = "3.41.9"
 backend = "http:flutter"
 
+[tools.flutter."platforms.linux-x64"]
+checksum = "blake3:94f9b606ba9861344c5681fad397539924ef8d61300b6c0a9636716f56fbfef0"
+url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.9-stable.tar.xz"
+
 [[tools."gem:cocoapods"]]
 version = "1.16.2"
 backend = "gem:cocoapods"
